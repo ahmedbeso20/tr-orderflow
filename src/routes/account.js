@@ -8,7 +8,7 @@ const MARKET_KEYS = ['a', 'n', 'j'];
 const DAY_MS = 86400_000;
 
 module.exports = (r, app) => {
-  const { q, cfg, limiter, session, mailer, notify, model } = app;
+  const { q, cfg, limiter, cipher, session, mailer, notify, logAudit, model } = app;
   const reload = (id) => q('SELECT * FROM users WHERE id = ?').get(id);
   const noDemo = (u) => { if (u.is_demo) throw new HttpError(403, 'هذا الإجراء غير متاح في الحساب التجريبي'); };
 
@@ -23,10 +23,14 @@ module.exports = (r, app) => {
     const f = {};
     if (body.storeName !== undefined) f.store_name = text(body.storeName, 'اسم المتجر', { min: 2, max: 60 });
     if (body.taxId !== undefined) {
-      f.tax_id = latin(text(body.taxId, 'الرقم الضريبي', { max: 20, optional: true }));
-      if (!/^[0-9\- ]*$/.test(f.tax_id)) throw bad('الرقم الضريبي: أرقام وشرطات فقط');
+      const cleanTax = latin(text(body.taxId, 'الرقم الضريبي', { max: 20, optional: true }));
+      if (!/^[0-9\- ]*$/.test(cleanTax)) throw bad('الرقم الضريبي: أرقام وشرطات فقط');
+      f.tax_id = cleanTax ? cipher.encrypt(cleanTax) : '';
     }
-    if (body.instaPayHandle !== undefined) f.instapay = text(body.instaPayHandle, 'عنوان InstaPay', { max: 60, optional: true });
+    if (body.instaPayHandle !== undefined) {
+      const cleanIpa = text(body.instaPayHandle, 'عنوان InstaPay', { max: 60, optional: true });
+      f.instapay = cleanIpa ? cipher.encrypt(cleanIpa) : '';
+    }
     if (!user.is_demo) { // الموبايل والبريد هما بيانات الدخول، فلا تُعدَّل في الحساب التجريبي
       if (body.storePhone !== undefined) f.phone = phone(body.storePhone);
       if (body.storeEmail !== undefined) {
@@ -201,20 +205,25 @@ module.exports = (r, app) => {
     return { ok: true };
   });
 
-  r.post('/api/account/password', async ({ user, body, res }) => {
+  r.post('/api/account/password', async ({ user, body, res, ip }) => {
     noDemo(user);
     if (!limiter.hit(`pw:${user.id}`, 5, 600_000)) throw new HttpError(429, 'محاولات كثيرة، حاول بعد قليل');
     if (!(await verifyPassword(String(body.current ?? ''), user.pass_hash))) throw new HttpError(403, 'كلمة المرور الحالية غير صحيحة');
     const hash = await hashPassword(password(body.next, user.phone));
     q('UPDATE users SET pass_hash = ?, token_ver = token_ver + 1 WHERE id = ?').run(hash, user.id);
+    logAudit(user.id, 'security.password_change', 'user', user.id, { role: user.role }, ip);
     session.issue(res, reload(user.id)); // تنتهي الجلسات الأخرى ونُبقي هذه
     return { ok: true };
   });
 
-  r.delete('/api/account', async ({ user, body, res }) => {
+  r.delete('/api/account', async ({ user, body, res, ip }) => {
+    if (user.role === 'owner') {
+      throw new HttpError(403, 'لا يمكن حذف حساب مالك المنصة من قاعدة البيانات لحماية استمرارية النظام.', { code: 'OWNER_PROTECTED' });
+    }
     if (!user.is_demo) {
       if (!limiter.hit(`pw:${user.id}`, 5, 600_000)) throw new HttpError(429, 'محاولات كثيرة، حاول بعد قليل');
       if (!(await verifyPassword(String(body.password ?? ''), user.pass_hash))) throw new HttpError(403, 'كلمة المرور غير صحيحة');
+      logAudit(user.id, 'security.account_delete', 'user', user.id, { storeName: user.store_name, email: user.email || '' }, ip);
     }
     q('DELETE FROM users WHERE id = ?').run(user.id); // تُحذف كل بياناته تلقائيًا
     session.clear(res);

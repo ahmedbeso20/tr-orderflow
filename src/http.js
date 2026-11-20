@@ -14,10 +14,15 @@ const MIME = {
 const CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors *";
 
 function securityHeaders(res, cfg) {
-  res.setHeader('Content-Security-Policy', CSP);
+  const csp = cfg.production ? `${CSP}; upgrade-insecure-requests` : CSP;
+  res.setHeader('Content-Security-Policy', csp);
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-DNS-Prefetch-Control', 'off');
+  res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()');
   if (cfg.hsts && cfg.production) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
 }
 
@@ -27,7 +32,18 @@ function createRouter() {
   const add = (method) => (pattern, handler, opts = {}) => {
     const keys = [];
     const source = pattern.replace(/[.+*?^${}()|[\]\\]/g, '\\$&').replace(/:([a-zA-Z]+)/g, (_, k) => (keys.push(k), '([^/]+)'));
-    routes.push({ method, re: new RegExp(`^${source}$`), keys, handler, auth: opts.auth !== false, admin: opts.admin === true, webhook: opts.webhook === true });
+    routes.push({
+      method,
+      re: new RegExp(`^${source}$`),
+      keys,
+      handler,
+      auth: opts.auth !== false,
+      admin: opts.admin === true,
+      owner: opts.owner === true,
+      moderator: opts.moderator === true,
+      permission: opts.permission || null,
+      webhook: opts.webhook === true
+    });
   };
   return {
     get: add('GET'), post: add('POST'), put: add('PUT'), delete: add('DELETE'),
@@ -47,19 +63,34 @@ function createRouter() {
   };
 }
 
-/** محدّد معدّل الطلبات في الذاكرة */
-function createLimiter() {
+/** محدّد معدّل الطلبات في الذاكرة مع سقف أقصى لمنع استنزاف الذاكرة (OOM DoS) */
+function createLimiter({ maxEntries = 50_000 } = {}) {
   const hits = new Map();
-  const timer = setInterval(() => { const now = Date.now(); for (const [k, v] of hits) if (v.reset <= now) hits.delete(k); }, 60_000);
+  const sweep = (now) => {
+    for (const [k, v] of hits) if (v.reset <= now) hits.delete(k);
+  };
+  const timer = setInterval(() => sweep(Date.now()), 60_000);
   timer.unref();
   return {
     /** true إذا ما زال الطلب ضمن الحد المسموح */
     hit(key, max, windowMs) {
       const now = Date.now();
       let v = hits.get(key);
-      if (!v || v.reset <= now) { v = { n: 0, reset: now + windowMs }; hits.set(key, v); }
+      if (!v || v.reset <= now) {
+        if (!v && hits.size >= maxEntries) {
+          sweep(now);
+          while (hits.size >= maxEntries) {
+            const oldestKey = hits.keys().next().value;
+            if (oldestKey === undefined) break;
+            hits.delete(oldestKey);
+          }
+        }
+        v = { n: 0, reset: now + windowMs };
+        hits.set(key, v);
+      }
       return ++v.n <= max;
     },
+    size: () => hits.size,
     reset: (key) => hits.delete(key),
     stop: () => clearInterval(timer)
   };

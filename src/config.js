@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { deriveSubkey } = require('./security');
 
 const ROOT = path.join(__dirname, '..');
 try { process.loadEnvFile(path.join(ROOT, '.env')); } catch { /* ملف .env اختياري */ }
@@ -15,7 +16,7 @@ function load(o = {}) {
   const e = process.env;
   const dataDir = path.resolve(o.dataDir || e.DATA_DIR || path.join(os.tmpdir(), 'orderflow-data'));
   const dbFile = o.dbFile || e.DB_FILE || path.join(dataDir, 'omniarab.db');
-  if (dbFile !== ':memory:') fs.mkdirSync(path.dirname(dbFile), { recursive: true });
+  if (dbFile !== ':memory:') fs.mkdirSync(path.dirname(dbFile), { recursive: true, mode: 0o700 });
   const nodeEnv = o.nodeEnv || e.NODE_ENV || 'development';
   const production = nodeEnv === 'production';
   const isCloud = Boolean(e.K_SERVICE || e.APP_URL || production);
@@ -23,8 +24,16 @@ function load(o = {}) {
 
   let secret = o.secret || e.SESSION_SECRET;
   if (!secret || secret.length < 32) {
+    if (production) {
+      console.warn('[security] تحذير: SESSION_SECRET غير مضبوط أو أقل من 32 حرفًا في بيئة الإنتاج.');
+    }
     secret = FALLBACK_SECRET;
   }
+
+  const rawEncSecret = o.dataEncryptionKey || e.DATA_ENCRYPTION_KEY || secret;
+  const sessionKey = deriveSubkey(secret, 'session-hmac-v1', 32);
+  const receiptKey = deriveSubkey(secret, 'receipt-hmac-v1', 32);
+  const encryptionKey = deriveSubkey(rawEncSecret, 'db-field-aes256gcm-v1', 32);
 
   return Object.freeze({
     port: +(o.port ?? e.PORT ?? 3000),
@@ -32,6 +41,9 @@ function load(o = {}) {
     dbFile,
     publicDir: path.join(ROOT, 'public'),
     secret,
+    sessionKey,
+    receiptKey,
+    encryptionKey,
     cookieName: 'omni_sid',
     secureCookie: flag(o.secureCookie ?? e.COOKIE_SECURE, isHttps),
     hsts: production,
@@ -39,9 +51,13 @@ function load(o = {}) {
     trustProxy: flag(o.trustProxy ?? e.TRUST_PROXY, isCloud),
     geminiKey: o.geminiKey ?? e.GEMINI_API_KEY ?? '',
     geminiModel: o.geminiModel || e.GEMINI_MODEL || 'gemini-3-flash-preview',
-    // بيانات أول مدير للنظام (تُقرأ من البيئة أو الإعدادات)
-    adminPhone: String(o.adminPhone ?? e.ADMIN_PHONE ?? '').trim(),
-    adminPassword: String(o.adminPassword ?? e.ADMIN_PASSWORD ?? ''),
+    // بيانات حساب المالك الوحيد للنظام (تُقرأ من البيئة أو الإعدادات)
+    ownerName: String(o.ownerName ?? e.OWNER_NAME ?? 'مالك منصة OrderFlow').trim(),
+    ownerEmail: String(o.ownerEmail ?? e.OWNER_EMAIL ?? e.ADMIN_EMAIL ?? (!production ? 'owner@orderflow.eg' : '')).trim().toLowerCase(),
+    ownerPhone: String(o.ownerPhone ?? o.adminPhone ?? e.OWNER_PHONE ?? e.ADMIN_PHONE ?? (!production ? '01099990000' : '')).trim(),
+    ownerPassword: String(o.ownerPassword ?? o.adminPassword ?? e.OWNER_PASSWORD ?? e.ADMIN_PASSWORD ?? (!production ? 'Owner@2026!' : '')),
+    adminPhone: String(o.adminPhone ?? o.ownerPhone ?? e.ADMIN_PHONE ?? e.OWNER_PHONE ?? '').trim(),
+    adminPassword: String(o.adminPassword ?? o.ownerPassword ?? e.ADMIN_PASSWORD ?? e.OWNER_PASSWORD ?? ''),
     mailTransport: o.mailTransport || null,
     // تغيير الباقة دون دفع مسموح في بيئة التطوير فقط
     allowPlanSelfService: flag(o.allowPlanSelfService ?? e.ALLOW_PLAN_SELF_SERVICE, !production),

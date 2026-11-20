@@ -8,7 +8,7 @@ const { subscriptionReceiptPage } = require('../pages');
 const { sendText } = require('../http');
 
 module.exports = (r, app) => {
-  const { q, cfg, limiter, model, payments } = app;
+  const { q, cfg, limiter, cipher, model, payments } = app;
   const reload = (id) => q('SELECT * FROM users WHERE id = ?').get(id);
   const cycleOf = (body) => (body.cycle === 'yearly' ? 'yearly' : 'monthly');
   const codeOf = (v) => latin(String(v ?? '')).trim().toUpperCase();
@@ -128,8 +128,9 @@ module.exports = (r, app) => {
     return { plan: model.planOf(reload(user.id)) };
   });
 
-  // ---- الإيصالات: رابط موقَّع قصير العمر بدل تمرير توكن الجلسة في العنوان ----
-  const sign = (id, exp) => crypto.createHmac('sha256', cfg.secret).update(`receipt:${id}:${exp}`).digest('base64url');
+  // ---- الإيصالات: رابط موقَّع قصير العمر بمفتاح فرعي مستقل بدل تمرير توكن الجلسة في العنوان ----
+  const receiptKey = cfg.receiptKey || cfg.secret;
+  const sign = (id, exp) => crypto.createHmac('sha256', receiptKey).update(`receipt:${id}:${exp}`).digest('base64url');
   const validSig = (id, exp, sig) => {
     if (!sig || !(Number(exp) > Date.now() / 1000)) return false;
     const a = Buffer.from(String(sig)), b = Buffer.from(sign(id, Number(exp)));
@@ -150,7 +151,8 @@ module.exports = (r, app) => {
     if (!pay && validSig(id, query.exp, query.sig)) pay = q('SELECT * FROM plan_payments WHERE id = ?').get(id);
     if (!pay) throw new HttpError(404, 'إيصال الدفع غير موجود');
     if (pay.status !== 'paid') throw new HttpError(409, 'الإيصال متاح بعد تأكيد الدفع فقط');
-    const owner = reload(pay.user_id);
+    const rawOwner = reload(pay.user_id);
+    const owner = rawOwner && cipher ? { ...rawOwner, tax_id: cipher.decrypt(rawOwner.tax_id) } : rawOwner;
     sendText(res, 200, subscriptionReceiptPage(pay, owner), { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'private, no-store' });
   }, { auth: false });
 };

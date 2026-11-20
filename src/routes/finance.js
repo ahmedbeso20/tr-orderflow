@@ -9,9 +9,10 @@ const FEES = `CASE WHEN status NOT IN (3, 4) AND approval_status != 'rejected' T
 const NET = `CASE WHEN status NOT IN (3, 4) AND approval_status != 'rejected' THEN total - total * ${FEE_RATE_SQL} - cost_total - ship_fee WHEN status = 3 AND approval_status != 'rejected' THEN -ship_fee * 1.8 ELSE 0 END`;
 
 
-module.exports = (r, { q, tx, model }) => {
+module.exports = (r, { q, tx, model, cipher }) => {
   const iso = (t) => new Date(t).toISOString();
   const pct = (cur, prev) => (prev ? Math.round(((cur - prev) / Math.abs(prev)) * 1000) / 10 : null);
+  const ipaOf = (u) => (cipher ? cipher.decrypt(u.instapay) : String(u.instapay || ''));
 
   const { codBalances } = model;
 
@@ -67,20 +68,21 @@ module.exports = (r, { q, tx, model }) => {
     };
   });
 
-  r.get('/api/cod', ({ user }) => ({ ...codBalances(user.id), instaPayHandle: user.instapay }));
+  r.get('/api/cod', ({ user }) => ({ ...codBalances(user.id), instaPayHandle: ipaOf(user) }));
 
   r.post('/api/cod/:courier/payout', ({ user, params }) => {
     const label = COURIER_BY_KEY[params.courier];
     if (!label) throw new HttpError(404, 'شركة الشحن غير معروفة');
-    if (!user.instapay) throw new HttpError(409, 'أضف عنوان InstaPay لاستلام التحصيلات من صفحة الإعدادات أولًا');
+    const handle = ipaOf(user);
+    if (!handle) throw new HttpError(409, 'أضف عنوان InstaPay لاستلام التحصيلات من صفحة الإعدادات أولًا');
     const out = tx(() => {
       const c = codBalances(user.id).couriers.find((x) => x.key === params.courier);
       if (c.collected <= 0 || c.net <= 0) throw new HttpError(409, 'لا يوجد رصيد قابل للسحب لدى هذه الشركة حاليًا');
       const now = nowIso();
       q("UPDATE orders SET settled_at = ? WHERE user_id = ? AND pay = ? AND courier = ? AND status = 2 AND settled_at IS NULL").run(now, user.id, COD, label);
-      q('INSERT INTO payouts (user_id,courier,gross,fees,net,handle,created_at) VALUES (?,?,?,?,?,?,?)').run(user.id, label, c.collected, c.fees, c.net, user.instapay, now);
+      q('INSERT INTO payouts (user_id,courier,gross,fees,net,handle,created_at) VALUES (?,?,?,?,?,?,?)').run(user.id, label, c.collected, c.fees, c.net, cipher ? cipher.encrypt(handle) : handle, now);
       return c;
     });
-    return { net: out.net, handle: user.instapay, ...codBalances(user.id), instaPayHandle: user.instapay };
+    return { net: out.net, handle, ...codBalances(user.id), instaPayHandle: handle };
   });
 };

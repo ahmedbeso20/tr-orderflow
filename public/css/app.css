@@ -3304,6 +3304,177 @@ dialog.dlg-wide .dlg-head {
   }
 }
 
+/* ==========================================================================
+   RBAC Control Panels (Owner & Moderator Dedicated Workspaces)
+   ========================================================================== */
+.rbac-status {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.rbac-status.ok { color: var(--ok); }
+.rbac-status.wn { color: var(--wn); }
+.rbac-status.er { color: var(--er); }
+
+.rbac-subnote {
+  display: block;
+  font-size: 11.5px;
+  margin-top: 3px;
+  max-width: 240px;
+  white-space: normal;
+  line-height: 1.45;
+}
+
+.rbac-role-text {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--mu);
+}
+.rbac-role-text.owner { color: var(--pr); }
+.rbac-role-text.mod { color: var(--ac); }
+
+.rbac-inline-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--mu);
+  font-variant-numeric: tabular-nums;
+}
+
+.rbac-slot-counter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 96px;
+  padding: 8px 14px;
+  border-radius: var(--rad-sm);
+  background: var(--bg-soft);
+  border: 1px solid var(--bd);
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+}
+
+.rbac-mod-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 18px;
+}
+
+.rbac-mod-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rbac-perm-section {
+  padding-top: 12px;
+  border-top: 1px solid var(--bd);
+}
+
+.rbac-perm-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 10px;
+}
+
+.rbac-mod-header-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.rbac-mod-header-text {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.rbac-mod-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.rbac-perm-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--rad-sm);
+  border: 1px solid var(--bd);
+  background: var(--bg-soft);
+  cursor: pointer;
+  margin: 0;
+  font-weight: 500;
+  transition: border-color 0.16s ease, background 0.16s ease;
+}
+
+.rbac-perm-toggle:hover {
+  border-color: var(--pr);
+}
+
+.rbac-perm-toggle input[type="checkbox"] {
+  width: 17px;
+  height: 17px;
+  margin: 2px 0 0;
+  accent-color: var(--pr);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.rbac-perm-toggle span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.45;
+}
+
+.rbac-perm-toggle b {
+  font-size: 13.5px;
+  color: var(--tx);
+}
+
+.rbac-perm-toggle small {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.rbac-mod-actions {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--bd);
+  gap: 8px;
+}
+
+.rbac-pending-box {
+  text-align: center;
+  padding: 12px 6px 4px;
+}
+
+.rbac-pending-icon {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 14px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--wn) 14%, transparent);
+  color: var(--wn);
+}
+
+@media (max-width: 640px) {
+  .rbac-mod-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

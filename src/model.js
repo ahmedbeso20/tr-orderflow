@@ -3,7 +3,8 @@
 const { PLANS, GATEWAY_METHODS, COURIERS, COD } = require('./domain');
 const { parseJson, round2 } = require('./util');
 
-function createModel(q) {
+function createModel(q, cipher = null) {
+  const dec = (v) => (cipher ? cipher.decrypt(v) : String(v || ''));
   const productOf = (p) => ({
     id: p.id,
     name: p.name,
@@ -42,28 +43,35 @@ function createModel(q) {
     cancelledAt: o.cancelled_at || null,
     returnReason: o.return_reason || ''
   });
-  const meOf = (u) => ({
-    id: u.id,
-    storeName: u.store_name,
-    phone: u.is_demo ? '' : u.phone,
-    email: u.email || '',
-    emailVerified: Boolean(u.email_verified_at),
-    emailVerifiedAt: u.email_verified_at || null,
-    role: u.role || 'client',
-    status: u.status || 'active',
-    plan: u.plan,
-    isDemo: !!u.is_demo,
-    impersonatedBy: u._impersonatedBy || null,
-    readOnly: Boolean(u._readOnly),
-    createdAt: u.created_at
-  });
+  const meOf = (u) => {
+    const { normalizePermissions, ROLES } = require('./rbac');
+    return {
+      id: u.id,
+      storeName: u.store_name,
+      fullName: u.full_name || u.store_name,
+      phone: u.is_demo ? '' : u.phone,
+      email: u.email || '',
+      emailVerified: Boolean(u.email_verified_at),
+      emailVerifiedAt: u.email_verified_at || null,
+      role: u.role || ROLES.CLIENT,
+      status: u.status || 'pending',
+      permissions: u.role === ROLES.MODERATOR ? normalizePermissions(u.permissions) : null,
+      rejectReason: u.reject_reason || '',
+      reviewedAt: u.reviewed_at || null,
+      plan: u.plan,
+      isDemo: !!u.is_demo,
+      impersonatedBy: u._impersonatedBy || null,
+      readOnly: Boolean(u._readOnly),
+      createdAt: u.created_at
+    };
+  };
   const settingsOf = (u) => ({
     storeName: u.store_name,
     storeEmail: u.is_demo ? 'sales@elnoor-eg.com' : u.email || '',
     emailVerified: Boolean(u.email_verified_at),
     storePhone: u.is_demo ? '01012345678' : u.phone,
-    taxId: u.tax_id,
-    instaPayHandle: u.instapay,
+    taxId: dec(u.tax_id),
+    instaPayHandle: dec(u.instapay),
     integrations: parseJson(u.integrations, {}),
     notifications: parseJson(u.notifications, {}),
     lastSyncAt: u.last_sync_at
@@ -147,8 +155,12 @@ function createModel(q) {
   const auditOf = (a) => ({
     id: a.id,
     adminId: a.admin_id,
-    adminName: a.admin_name || 'مدير النظام',
+    actorId: a.admin_id,
+    adminName: a.actor_name || a.admin_name || 'إدارة النظام',
+    actorName: a.actor_name || a.admin_name || 'إدارة النظام',
+    actorEmail: a.actor_email || a.admin_email || '',
     adminPhone: a.admin_phone || '',
+    actorRole: a.actor_role || a.user_role || 'owner',
     action: a.action,
     targetType: a.target_type,
     targetId: a.target_id,

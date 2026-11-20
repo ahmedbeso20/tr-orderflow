@@ -233,19 +233,148 @@ CREATE TABLE service_requests (
   created_at TEXT NOT NULL
 );
 CREATE INDEX service_requests_user ON service_requests(user_id, created_at DESC);
-`];
+`, {
+  disableForeignKeys: true,
+  sql: `
+-- ترقية جدول المستخدمين لنظام الصلاحيات الكامل (Owner / Moderator / Client) وحالة المراجعة (pending / active / rejected / suspended)
+CREATE TABLE users_new (
+  id INTEGER PRIMARY KEY,
+  phone TEXT NOT NULL UNIQUE,
+  email TEXT,
+  pass_hash TEXT NOT NULL,
+  token_ver INTEGER NOT NULL DEFAULT 1,
+  store_name TEXT NOT NULL,
+  full_name TEXT NOT NULL DEFAULT '',
+  tax_id TEXT NOT NULL DEFAULT '',
+  instapay TEXT NOT NULL DEFAULT '',
+  plan TEXT NOT NULL DEFAULT 'free',
+  is_demo INTEGER NOT NULL DEFAULT 0,
+  integrations TEXT NOT NULL DEFAULT '{}',
+  notifications TEXT NOT NULL DEFAULT '{"s":1,"o":1,"f":1,"w":0}',
+  ai_cache TEXT NOT NULL DEFAULT '{}',
+  last_sync_at TEXT,
+  order_seq INTEGER NOT NULL DEFAULT 1000,
+  created_at TEXT NOT NULL,
+  plan_cycle TEXT NOT NULL DEFAULT 'monthly',
+  plan_expires_at TEXT,
+  auto_renew INTEGER NOT NULL DEFAULT 1,
+  default_pay_method TEXT NOT NULL DEFAULT 'card',
+  role TEXT NOT NULL DEFAULT 'client' CHECK (role IN ('owner', 'moderator', 'client')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'rejected', 'suspended')),
+  permissions TEXT NOT NULL DEFAULT '{}',
+  reject_reason TEXT NOT NULL DEFAULT '',
+  reviewed_by INTEGER REFERENCES users_new(id) ON DELETE SET NULL,
+  reviewed_at TEXT,
+  email_verified_at TEXT
+);
+
+INSERT INTO users_new (
+  id, phone, email, pass_hash, token_ver, store_name, full_name, tax_id, instapay, plan, is_demo,
+  integrations, notifications, ai_cache, last_sync_at, order_seq, created_at,
+  plan_cycle, plan_expires_at, auto_renew, default_pay_method, role, status, email_verified_at
+)
+SELECT
+  id, phone, email, pass_hash, token_ver, store_name, store_name, tax_id, instapay, plan, is_demo,
+  integrations, notifications, ai_cache, last_sync_at, order_seq, created_at,
+  plan_cycle, plan_expires_at, auto_renew, default_pay_method,
+  CASE WHEN role = 'admin' THEN 'owner' ELSE 'client' END,
+  status,
+  email_verified_at
+FROM users;
+
+DROP TABLE users;
+ALTER TABLE users_new RENAME TO users;
+
+CREATE UNIQUE INDEX users_email ON users(email) WHERE email IS NOT NULL;
+CREATE UNIQUE INDEX users_single_owner ON users(role) WHERE role = 'owner';
+CREATE INDEX users_role_status ON users(role, status);
+
+-- ترقية سجل المراقبة (Audit Log) ليحفظ اسم ودور المنفذ حتى بعد حذف حساب المشرف
+CREATE TABLE audit_log_new (
+  id INTEGER PRIMARY KEY,
+  admin_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  actor_name TEXT NOT NULL DEFAULT '',
+  actor_email TEXT NOT NULL DEFAULT '',
+  actor_role TEXT NOT NULL DEFAULT 'owner',
+  action TEXT NOT NULL,
+  target_type TEXT NOT NULL DEFAULT '',
+  target_id INTEGER,
+  details TEXT NOT NULL DEFAULT '{}',
+  ip TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+
+INSERT INTO audit_log_new (id, admin_id, actor_name, actor_email, actor_role, action, target_type, target_id, details, ip, created_at)
+SELECT
+  a.id,
+  a.admin_id,
+  COALESCE(u.store_name, ''),
+  COALESCE(u.email, ''),
+  COALESCE(u.role, 'owner'),
+  a.action,
+  a.target_type,
+  a.target_id,
+  a.details,
+  a.ip,
+  a.created_at
+FROM audit_log a
+LEFT JOIN users u ON u.id = a.admin_id;
+
+DROP TABLE audit_log;
+ALTER TABLE audit_log_new RENAME TO audit_log;
+CREATE INDEX audit_log_created ON audit_log(created_at DESC);
+CREATE INDEX audit_log_actor ON audit_log(admin_id, created_at DESC);
+
+-- جدول إعدادات المنصة العامة (حصريًا للمالك)
+CREATE TABLE platform_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+INSERT INTO platform_settings (key, value, updated_at) VALUES
+  ('platform_name', 'OrderFlow', '2026-01-01T00:00:00.000Z'),
+  ('support_email', 'support@orderflow.eg', '2026-01-01T00:00:00.000Z'),
+  ('support_phone', '+20 100 000 0000', '2026-01-01T00:00:00.000Z'),
+  ('registration_open', '1', '2026-01-01T00:00:00.000Z'),
+  ('require_client_approval', '1', '2026-01-01T00:00:00.000Z'),
+  ('maintenance_notice', '', '2026-01-01T00:00:00.000Z');
+`
+}];
 
 const fs = require('node:fs');
 
+function enforceDbFilePermissions(file) {
+  if (!file || file === ':memory:') return;
+  for (const suffix of ['', '-wal', '-shm']) {
+    try {
+      if (fs.existsSync(file + suffix)) fs.chmodSync(file + suffix, 0o600);
+    } catch (_) { /* تجاهل على أنظمة الملفات التي لا تدعم chmod */ }
+  }
+}
+
 function initDb(file) {
   const db = new DatabaseSync(file);
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA synchronous = NORMAL;');
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA synchronous = NORMAL; PRAGMA secure_delete = ON; PRAGMA temp_store = MEMORY;');
+  enforceDbFilePermissions(file);
 
   let v = db.prepare('PRAGMA user_version').get().user_version;
   for (; v < MIGRATIONS.length; v++) {
+    const mig = MIGRATIONS[v];
+    const sql = typeof mig === 'string' ? mig : mig.sql;
+    const toggleFk = typeof mig === 'object' && mig.disableForeignKeys;
+    if (toggleFk) db.exec('PRAGMA foreign_keys = OFF;');
     db.exec('BEGIN');
-    try { db.exec(MIGRATIONS[v]); db.exec(`PRAGMA user_version = ${v + 1}`); db.exec('COMMIT'); }
-    catch (e) { db.exec('ROLLBACK'); throw e; }
+    try {
+      db.exec(sql);
+      db.exec(`PRAGMA user_version = ${v + 1}`);
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      if (toggleFk) db.exec('PRAGMA foreign_keys = ON;');
+      throw e;
+    }
+    if (toggleFk) db.exec('PRAGMA foreign_keys = ON;');
   }
   return db;
 }
@@ -256,10 +385,18 @@ function openDb(file) {
     db = initDb(file);
   } catch (e) {
     if (file === ':memory:') throw e;
+    const msg = String(e?.message || '');
+    const isCorrupt = /not a database|malformed|SQLITE_CORRUPT|SQLITE_NOTADB/i.test(msg);
+    if (!isCorrupt) throw e;
+    // في حالة تلف الملف فقط: نعزله بنسخة احتياطية بدلاً من مسح البيانات صامتًا
     try { db?.close(); } catch (_) {}
+    const stamp = Date.now();
     for (const suffix of ['', '-shm', '-wal']) {
-      try { fs.rmSync(file + suffix, { force: true }); } catch (_) {}
+      try {
+        if (fs.existsSync(file + suffix)) fs.renameSync(file + suffix, `${file}${suffix}.corrupt.${stamp}`);
+      } catch (_) {}
     }
+    console.error(`[db] تم عزل ملف قاعدة بيانات تالف إلى ${file}.corrupt.${stamp} وإعادة التهيئة.`);
     db = initDb(file);
   }
 

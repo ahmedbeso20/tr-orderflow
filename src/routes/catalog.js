@@ -6,7 +6,10 @@ function cleanImage(v) {
   if (v === undefined || v === null || v === '') return '';
   const s = String(v).trim();
   if (s.length > 200_000) throw bad('حجم الصورة كبير جدًا');
-  if (/^(https?:\/\/|\/|data:image\/(png|jpeg|jpg|webp|gif|svg\+xml))/i.test(s)) return s;
+  // منع data:image/svg+xml (ثغرة XSS محتملة) ومنع الروابط النسبية للبروتوكول //
+  if (/^https?:\/\/[^\s"'<>]+$/i.test(s)) return s;
+  if (/^\/(?!\/)[^\s"'<>]+$/.test(s)) return s;
+  if (/^data:image\/(png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=]+$/i.test(s)) return s;
   throw bad('رابط أو صيغة الصورة غير صالحة');
 }
 
@@ -49,7 +52,7 @@ module.exports = (r, { q, model }) => {
     }
     const p = read(body, false);
     const now = nowIso();
-    const approvalStatus = user.role === 'admin' ? 'approved' : 'pending';
+    const approvalStatus = user.role === 'owner' ? 'approved' : 'pending';
     const id = dupSku(() => q('INSERT INTO products (user_id,name,sku,cat,markets,price,cost,stock,image,approval_status,reject_reason,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
       .run(user.id, p.name, p.sku, p.cat, p.markets, p.price, p.cost, p.stock, p.image, approvalStatus, '', now, now).lastInsertRowid);
     return { product: model.productOf(find(user.id, id)), ...model.meta(user) };
@@ -58,7 +61,7 @@ module.exports = (r, { q, model }) => {
   r.put('/api/products/:id', ({ user, params, body }) => {
     const cur = find(user.id, params.id);
     const patch = read(body, true);
-    if (cur.approval_status === 'rejected' && user.role !== 'admin') {
+    if (cur.approval_status === 'rejected' && user.role !== 'owner') {
       patch.approval_status = 'pending';
       patch.reject_reason = '';
     }

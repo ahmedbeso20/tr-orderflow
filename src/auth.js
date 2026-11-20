@@ -1,6 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
 const { HttpError } = require('./util');
+const { ROLES, hasPermission } = require('./rbac');
 
 const scrypt = (pw, salt) => new Promise((resolve, reject) =>
   crypto.scrypt(pw.normalize('NFKC'), salt, 64, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }, (e, k) => (e ? reject(e) : resolve(k))));
@@ -58,84 +59,141 @@ function parseCookies(header = '') {
 const cookie = (name, value, { maxAge, secure }) =>
   `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=${secure ? 'None' : 'Lax'}; Max-Age=${maxAge}${secure ? '; Secure; Partitioned' : ''}`;
 
-/** حارس صلاحيات المدير */
-function requireAdmin(user) {
-  if (!user) throw new HttpError(401, 'سجّل الدخول للمتابعة', { code: 'AUTH' });
-  if (user._readOnly || user.role !== 'admin') {
-    throw new HttpError(403, 'غير مصرح: هذه العملية مخصصة لمديري النظام فقط', { code: 'FORBIDDEN' });
+/** حارس صلاحية المالك الوحيد — يعيد 404 لإخفاء وجود لوحة المالك عن غير المصرح لهم */
+function requireOwner(user) {
+  if (!user || user._readOnly || user.role !== ROLES.OWNER || user.status !== 'active') {
+    throw new HttpError(404, 'الصفحة غير موجودة');
   }
   return user;
 }
 
-/** إدارة جلسة المستخدم عبر كوكي موقَّع HttpOnly ودعم ترويسة Authorization ومعامل ?token= للتحميل والطباعة */
+/** حارس صلاحية المشرف — يعيد 404 لغير المشرفين */
+function requireModerator(user) {
+  if (!user || user._readOnly || user.role !== ROLES.MODERATOR || user.status !== 'active') {
+    throw new HttpError(404, 'الصفحة غير موجودة');
+  }
+  return user;
+}
+
+/** حارس صلاحية مهمة محددة للمشرف (تعود 403 للمشرف عندما يعطّل المالك المهمة) */
+function requirePermission(user, permKey) {
+  if (!hasPermission(user, permKey)) {
+    throw new HttpError(403, 'هذه الصلاحية غير مفعّلة لحسابك حاليًا. راجع مالك المنصة.', { code: 'PERMISSION_DENIED', permission: permKey });
+  }
+  return user;
+}
+
+/** توافق مع الاسم القديم (حصريًا للمالك) */
+const requireAdmin = requireOwner;
+
+const { isDownloadTokenAllowedPath } = require('./security');
+
+/** إدارة جلسة المستخدم عبر كوكي موقَّع HttpOnly ودعم ترويسة Authorization مع كشف الإبطال الفوري للجلسة */
 function createSession(cfg, q) {
-  const userFromToken = (token) => {
-    if (!token) return null;
-    const p = verifyToken(cfg.secret, token);
-    if (!p) return null;
+  const signingKey = cfg.sessionKey || cfg.secret;
+
+  const inspectToken = (token) => {
+    if (!token) return { user: null, revoked: false, reason: 'missing' };
+    const p = verifyToken(signingKey, token);
+    if (!p) return { user: null, revoked: false, reason: 'invalid' };
     const u = q('SELECT * FROM users WHERE id = ?').get(p.u);
-    if (!u || u.token_ver !== p.v) return null;
-    if (u.status === 'suspended' && !p.impBy) return null;
+    if (!u) return { user: null, revoked: true, reason: 'deleted' };
+    if (u.token_ver !== p.v) return { user: null, revoked: true, reason: 'revoked' };
+    if (p.r && u.role !== p.r) return { user: null, revoked: true, reason: 'role_changed' };
     if (p.impBy) {
-      const admin = q('SELECT id, role, status FROM users WHERE id = ?').get(p.impBy);
-      if (!admin || admin.role !== 'admin' || admin.status === 'suspended') return null;
-      return { ...u, _impersonatedBy: admin.id, _readOnly: true };
+      const owner = q('SELECT id, role, status, token_ver FROM users WHERE id = ?').get(p.impBy);
+      if (!owner || owner.role !== ROLES.OWNER || owner.status !== 'active' || (p.impV !== undefined && owner.token_ver !== p.impV)) {
+        return { user: null, revoked: true, reason: 'impersonator_revoked' };
+      }
+      return { user: { ...u, _impersonatedBy: owner.id, _readOnly: true }, revoked: false, reason: 'ok' };
     }
-    return u;
+    if (u.status !== 'active') {
+      return { user: null, revoked: true, reason: u.status };
+    }
+    return { user: u, revoked: false, reason: 'ok' };
   };
+
+  const extractTokens = (req) => {
+    const tokens = [];
+    if (req.headers['x-impersonate-token']) tokens.push(String(req.headers['x-impersonate-token']).trim());
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) tokens.push(authHeader.slice(7).trim());
+    if (req.headers['x-omni-token']) tokens.push(String(req.headers['x-omni-token']).trim());
+    const ck = parseCookies(req.headers.cookie)[cfg.cookieName];
+    if (ck) tokens.push(ck);
+    if (req.method === 'GET' && req.url && req.url.includes('token=')) {
+      try {
+        const uUrl = new URL(req.url, 'http://localhost');
+        // لا نسمح بتمرير التوكن في رابط URL إلا لمسارات التصدير والطباعة المباشرة فقط لمنع تسريبه في السجلات أو للوحات التحكم
+        if (isDownloadTokenAllowedPath(uUrl.pathname)) {
+          const qToken = uUrl.searchParams.get('token');
+          if (qToken) tokens.push(qToken);
+        }
+      } catch { /* تجاهل */ }
+    }
+    return tokens;
+  };
+
+  const inspect = (req) => {
+    let sawRevoked = null;
+    for (const token of extractTokens(req)) {
+      const res = inspectToken(token);
+      if (res.user) return res;
+      if (res.revoked && !sawRevoked) sawRevoked = res;
+    }
+    return sawRevoked || { user: null, revoked: false, reason: 'none' };
+  };
+
   return {
     issue(res, user) {
-      const maxAge = user.is_demo ? cfg.demoTtlSec : 30 * 86400;
-      const token = signToken(cfg.secret, { u: user.id, v: user.token_ver, e: Math.floor(Date.now() / 1000) + maxAge });
+      const isPrivileged = user.role === ROLES.OWNER || user.role === ROLES.MODERATOR;
+      // مدة جلسة أقصر للحسابات الإدارية (12 ساعة) مقابل 14 يومًا للعملاء و24 ساعة للتجريبي
+      const maxAge = user.is_demo ? cfg.demoTtlSec : (isPrivileged ? 12 * 3600 : 14 * 86400);
+      const nowSec = Math.floor(Date.now() / 1000);
+      const token = signToken(signingKey, {
+        u: user.id,
+        v: user.token_ver,
+        r: user.role,
+        iat: nowSec,
+        jti: crypto.randomBytes(8).toString('hex'),
+        e: nowSec + maxAge
+      });
       res.setHeader('Set-Cookie', cookie(cfg.cookieName, token, { maxAge, secure: cfg.secureCookie }));
       return token;
     },
-    issueImpersonation(adminUser, targetUser) {
+    issueImpersonation(ownerUser, targetUser) {
       const maxAge = 3600;
-      return signToken(cfg.secret, {
+      const nowSec = Math.floor(Date.now() / 1000);
+      return signToken(signingKey, {
         u: targetUser.id,
         v: targetUser.token_ver,
-        impBy: adminUser.id,
+        r: targetUser.role,
+        impBy: ownerUser.id,
+        impV: ownerUser.token_ver,
         ro: 1,
-        e: Math.floor(Date.now() / 1000) + maxAge
+        iat: nowSec,
+        e: nowSec + maxAge
       });
     },
     clear(res) {
       res.setHeader('Set-Cookie', cookie(cfg.cookieName, '', { maxAge: 0, secure: cfg.secureCookie }));
     },
+    inspect,
     read(req) {
-      // 0. فحص ترويسة المعاينة الإدارية X-Impersonate-Token
-      if (req.headers['x-impersonate-token']) {
-        const u = userFromToken(String(req.headers['x-impersonate-token']).trim());
-        if (u) return u;
-      }
-      // 1. فحص ترويسة Authorization: Bearer <token>
-      const authHeader = req.headers.authorization;
-      if (authHeader && authHeader.startsWith('Bearer ')) {
-        const u = userFromToken(authHeader.slice(7).trim());
-        if (u) return u;
-      }
-      // 2. فحص ترويسة X-Omni-Token
-      if (req.headers['x-omni-token']) {
-        const u = userFromToken(String(req.headers['x-omni-token']).trim());
-        if (u) return u;
-      }
-      // 3. فحص الكوكي
-      const uCookie = userFromToken(parseCookies(req.headers.cookie)[cfg.cookieName]);
-      if (uCookie) return uCookie;
-      // 4. فحص معامل ?token= لطلبات GET (مثل تصدير CSV أو طباعة الفاتورة وبوالص الشحن داخل iframe)
-      if (req.method === 'GET' && req.url && req.url.includes('token=')) {
-        try {
-          const uUrl = new URL(req.url, 'http://localhost');
-          const qToken = uUrl.searchParams.get('token');
-          const uQuery = userFromToken(qToken);
-          if (uQuery) return uQuery;
-        } catch { /* تجاهل */ }
-      }
-      return null;
+      return inspect(req).user;
     }
   };
 }
 
-module.exports = { hashPassword, hashPasswordSync, verifyPassword, signToken, verifyToken, requireAdmin, createSession };
-
+module.exports = {
+  hashPassword,
+  hashPasswordSync,
+  verifyPassword,
+  signToken,
+  verifyToken,
+  requireOwner,
+  requireModerator,
+  requirePermission,
+  requireAdmin,
+  createSession
+};

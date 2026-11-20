@@ -6,7 +6,7 @@ const { sendText } = require('../http');
 
 const STATUS_LABEL = ['قيد التجهيز', 'تم الشحن', 'تم التسليم', 'مرتجع', 'ملغي'];
 
-module.exports = (r, { q, tx, model }) => {
+module.exports = (r, { q, tx, model, cipher }) => {
   const find = (uid, id) => {
     const o = q('SELECT * FROM orders WHERE id = ? AND user_id = ?').get(Number(id) || 0, uid);
     if (!o) throw new HttpError(404, 'الطلب غير موجود');
@@ -81,7 +81,7 @@ module.exports = (r, { q, tx, model }) => {
       }
       const no = q('UPDATE users SET order_seq = order_seq + 1 WHERE id = ? RETURNING order_seq').get(user.id).order_seq;
       const itemsText = lines.map(({ p, qty }) => `${p.name}${qty > 1 ? ` (${qty} قطع)` : ''}`).join(' + ').slice(0, 500);
-      const approvalStatus = user.role === 'admin' ? 'approved' : 'pending';
+      const approvalStatus = user.role === 'owner' ? 'approved' : 'pending';
       const id = q(`INSERT INTO orders (user_id,no,market,customer,phone,gov,address,pay,courier,total,cost_total,ship_fee,status,items,approval_status,reject_reason,created_at)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?)`).run(user.id, no, market, customer, ph, gov, address, pay, courier,
         Math.round(total * 100) / 100, Math.round(cost * 100) / 100, COURIERS[courier].fee, itemsText, approvalStatus, '', now).lastInsertRowid;
@@ -232,7 +232,8 @@ module.exports = (r, { q, tx, model }) => {
   r.get('/api/orders/:id/invoice', ({ user, params, res }) => {
     const o = find(user.id, params.id);
     const items = q('SELECT name, qty, price FROM order_items WHERE order_id = ?').all(o.id);
-    sendText(res, 200, invoicePage(o, items, user), { 'Content-Type': 'text/html; charset=utf-8' });
+    const store = cipher ? { ...user, tax_id: cipher.decrypt(user.tax_id) } : user;
+    sendText(res, 200, invoicePage(o, items, store), { 'Content-Type': 'text/html; charset=utf-8' });
   });
 };
 

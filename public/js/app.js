@@ -318,7 +318,7 @@ async function api(method, url, body) {
   const impToken = getImpersonateToken();
   const token = getStoredToken();
   const headers = { 'X-Requested-With': 'omniarab' };
-  if (impToken && !url.startsWith('/api/admin')) {
+  if (impToken && !url.startsWith('/api/admin') && !url.startsWith('/api/owner') && !url.startsWith('/api/moderator')) {
     headers['X-Impersonate-Token'] = impToken;
   } else if (token) {
     headers['Authorization'] = 'Bearer ' + token;
@@ -339,7 +339,9 @@ async function api(method, url, body) {
     try { localStorage.setItem('omni_token', data.token); } catch (_) {}
   }
   if (!res.ok) {
-    if (res.status === 401 && me) sessionExpired();
+    if (res.status === 401 && me) {
+      sessionExpired(data && data.code === 'SESSION_REVOKED' ? (data.error || 'تم إيقاف أو حذف حسابك — تم إنهاء الجلسة فورًا') : '');
+    }
     throw new ApiError(res.status, data.error || 'حدث خطأ غير متوقع', data);
   }
   return data;
@@ -376,6 +378,45 @@ const go = (hash) => {
   else location.hash = hash;
 };
 
+const roleHomeHash = (u) => {
+  if (!u) return '#/';
+  if (u.role === 'owner' && !u.readOnly && !getImpersonateToken()) return '#/owner';
+  if (u.role === 'moderator') return '#/moderator';
+  return '#/dash';
+};
+
+let sessionCheckTimer = null;
+function stopSessionHeartbeat() {
+  if (sessionCheckTimer) {
+    clearInterval(sessionCheckTimer);
+    sessionCheckTimer = null;
+  }
+}
+
+async function runSessionCheck() {
+  if (!me || me.isDemo) return;
+  try {
+    const r = await api('GET', '/api/auth/session-check');
+    if (r && r.me && me) {
+      const prevPerms = JSON.stringify(me.permissions || {});
+      const nextPerms = JSON.stringify(r.me.permissions || {});
+      me.permissions = r.me.permissions || {};
+      me.status = r.me.status;
+      if (prevPerms !== nextPerms && location.hash.startsWith('#/moderator')) {
+        renderApp(true);
+      }
+    }
+  } catch (_) {
+    // 401 is handled inside api() via sessionExpired()
+  }
+}
+
+function startSessionHeartbeat() {
+  stopSessionHeartbeat();
+  if (!me || me.isDemo) return;
+  sessionCheckTimer = setInterval(runSessionCheck, 5000);
+}
+
 function applySession(d) {
   me = d.me;
   products = d.products;
@@ -389,9 +430,11 @@ function applySession(d) {
     pgState.walletPhone = state.storePhone;
     pgState.fawryPhone = state.storePhone;
   }
+  startSessionHeartbeat();
 }
 
 function clearSession() {
+  stopSessionHeartbeat();
   me = null;
   products = [];
   payments = [];
@@ -406,9 +449,10 @@ function clearSession() {
   Object.assign(state, { prodQuery: '', prodStockFilter: 'all', orderQuery: '', orderStatusFilter: -1, orderPage: 1 });
 }
 
-function sessionExpired() {
+function sessionExpired(customMsg) {
   clearSession();
-  showToast('انتهت جلستك، سجّل الدخول من جديد', 4200);
+  if (dlg && dlg.open) dlg.close();
+  showToast(customMsg || 'انتهت جلستك، سجّل الدخول من جديد', 4800);
   go('#/');
 }
 
@@ -802,7 +846,7 @@ const renderLanding = () => `
       <div class="nav-actions">
         <button class="btn btn-gh btn-icon" data-a="theme" title="تبديل المظهر" aria-label="تبديل المظهر"><span class="theme-ico-moon">${ico('moon', 17)}</span><span class="theme-ico-sun">${ico('sunMoon', 17)}</span></button>
         ${me ? `
-          <a class="btn btn-ac btn-sm" href="#/dash">لوحة التحكم ${ico('arrowLeft', 15)}</a>
+          <a class="btn btn-ac btn-sm" href="${roleHomeHash(me)}">لوحة التحكم ${ico('arrowLeft', 15)}</a>
         ` : `
           <button class="nav-text-link hide-xs" data-a="auth" data-m="0">دخول</button>
           <button class="btn btn-ac btn-sm" data-a="auth" data-m="1">ابدأ مجانًا</button>
@@ -825,7 +869,7 @@ const renderLanding = () => `
       </div>
       <div class="row-wrap" style="padding-top:12px;border-top:1px solid var(--bd)">
         ${me ? `
-          <a class="btn btn-ac sp" href="#/dash">لوحة التحكم</a>
+          <a class="btn btn-ac sp" href="${roleHomeHash(me)}">لوحة التحكم</a>
           <button class="btn btn-gh" data-a="logout">خروج</button>
         ` : `
           <button class="btn btn-ac sp" data-a="auth" data-m="1">ابدأ مجانًا</button>
@@ -3186,7 +3230,7 @@ const renderPublicHeader = () => `
       <div class="nav-actions">
         <button class="btn btn-gh btn-icon" data-a="theme" aria-label="تبديل المظهر"><span class="theme-ico-moon">${ico('moon', 17)}</span><span class="theme-ico-sun">${ico('sunMoon', 17)}</span></button>
         ${me
-          ? `<a class="btn btn-ac btn-sm" href="#/dash">لوحة التحكم ${ico('arrowLeft', 15)}</a>`
+          ? `<a class="btn btn-ac btn-sm" href="${roleHomeHash(me)}">لوحة التحكم ${ico('arrowLeft', 15)}</a>`
           : `<button class="nav-text-link hide-xs" data-a="auth" data-m="0">تسجيل الدخول</button>
              <button class="btn btn-ac btn-sm" data-a="auth" data-m="1">حساب مجاني</button>`}
       </div>
@@ -3344,7 +3388,7 @@ const renderNotFoundPage = (badRoute) => `
       <p class="mu" style="margin-bottom:22px">المسار <code dir="ltr">#/${esc(badRoute)}</code> غير متاح أو ربما تم نقله.</p>
       <div class="row-wrap" style="justify-content:center;gap:12px">
         <a class="btn btn-ac" href="#/">العودة للصفحة الرئيسية</a>
-        ${me ? `<a class="btn btn-gh" href="#/dash">الذهاب للوحة التحكم ◂</a>` : ''}
+        ${me ? `<a class="btn btn-gh" href="${roleHomeHash(me)}">الذهاب للوحة التحكم ◂</a>` : ''}
       </div>
     </div>
   </main>
@@ -3444,12 +3488,27 @@ function parseRoute(rawHash) {
   if (path === 'reset-password') return { type: 'reset-password', viewKey: path, params: {}, query };
   if (path === 'verify-email') return { type: 'verify-email', viewKey: path, params: {}, query };
 
+  const ownerClientDetail = /^owner\/clients\/(\d+)$/.exec(path);
+  if (ownerClientDetail) {
+    return { type: 'owner', viewKey: 'owner/client-detail', params: { id: ownerClientDetail[1] }, query };
+  }
+  if (path === 'owner' || path.startsWith('owner/')) {
+    if (views[path]) return { type: 'owner', viewKey: path, params: {}, query };
+    return { type: 'not-found', viewKey: path, params: {}, query };
+  }
+
+  if (path === 'moderator' || path.startsWith('moderator/')) {
+    if (views[path]) return { type: 'moderator', viewKey: path, params: {}, query };
+    return { type: 'not-found', viewKey: path, params: {}, query };
+  }
+
   const clientDetailMatch = /^admin\/clients\/(\d+)$/.exec(path);
   if (clientDetailMatch) {
-    return { type: 'admin', viewKey: 'admin/client-detail', params: { id: clientDetailMatch[1] }, query };
+    return { type: 'owner', viewKey: 'owner/client-detail', params: { id: clientDetailMatch[1] }, query };
   }
   if (path === 'admin' || path.startsWith('admin/')) {
-    if (views[path]) return { type: 'admin', viewKey: path, params: {}, query };
+    const mapped = path === 'admin' ? 'owner' : path.replace(/^admin\//, 'owner/');
+    if (views[mapped]) return { type: 'owner', viewKey: mapped, params: {}, query };
     return { type: 'not-found', viewKey: path, params: {}, query };
   }
   if (views[path]) {
@@ -3512,6 +3571,58 @@ async function renderApp(keepScroll = false) {
     return;
   }
 
+  // إخفاء لوحات المالك والمشرفين تمامًا (404 Not Found) عن أي مستخدم غير مخوّل
+  if (parsed.type === 'owner') {
+    if (!me || me.role !== 'owner' || me.readOnly) {
+      root.removeAttribute('aria-busy');
+      root.innerHTML = renderNotFoundPage(parsed.viewKey);
+      enhanceA11y(root);
+      if (!keepScroll) window.scrollTo(0, 0);
+      return;
+    }
+    const { viewKey, params } = parsed;
+    let data = null;
+    if (loaders[viewKey]) {
+      root.setAttribute('aria-busy', 'true');
+      try { data = await loaders[viewKey](params); } catch (e) { data = { __error: e.message }; }
+      if (seq !== renderSeq) return;
+    }
+    root.removeAttribute('aria-busy');
+    root.innerHTML = window.OrderFlowRBAC.renderOwnerShell(viewKey, data, {
+      me, state, ico, LOGO_HTML, errorState,
+      renderAppContent: (k, d) => views[k](d)
+    });
+    enhanceA11y(root);
+    if (!keepScroll) window.scrollTo(0, 0);
+    return;
+  }
+
+  if (parsed.type === 'moderator') {
+    const canSeeApprovals = Boolean(me && me.permissions && me.permissions.review_products_orders);
+    if (!me || me.role !== 'moderator' || (parsed.viewKey === 'moderator/approvals' && !canSeeApprovals)) {
+      root.removeAttribute('aria-busy');
+      root.innerHTML = renderNotFoundPage(parsed.viewKey);
+      enhanceA11y(root);
+      if (!keepScroll) window.scrollTo(0, 0);
+      return;
+    }
+    const { viewKey, params } = parsed;
+    let data = null;
+    if (loaders[viewKey]) {
+      root.setAttribute('aria-busy', 'true');
+      try { data = await loaders[viewKey](params); } catch (e) { data = { __error: e.message }; }
+      if (seq !== renderSeq) return;
+    }
+    root.removeAttribute('aria-busy');
+    root.innerHTML = window.OrderFlowRBAC.renderModeratorShell(viewKey, data, {
+      me, state, ico, LOGO_HTML, errorState,
+      renderAppContent: (k, d) => views[k](d)
+    });
+    enhanceA11y(root);
+    if (!keepScroll) window.scrollTo(0, 0);
+    return;
+  }
+
   if (!me) {
     go('#/');
     showToast('سجّل الدخول للوصول إلى لوحة التحكم');
@@ -3519,10 +3630,13 @@ async function renderApp(keepScroll = false) {
     return;
   }
 
-  if (parsed.type === 'admin' && me.role !== 'admin') {
-    root.removeAttribute('aria-busy');
-    root.innerHTML = renderShell('dash', { __error: 'صلاحية المشرف مطلوبة للوصول إلى هذا القسم (403 Forbidden)' });
-    enhanceA11y(root);
+  // توجيه المالك والمشرف إلى لوحتهم الخاصة عند زيارة مسارات العملاء مباشرة
+  if (me.role === 'owner' && !me.readOnly && !getImpersonateToken()) {
+    go('#/owner');
+    return;
+  }
+  if (me.role === 'moderator') {
+    go('#/moderator');
     return;
   }
 
@@ -3544,6 +3658,14 @@ async function renderApp(keepScroll = false) {
 
 const boot = async () => {
   if (getStoredToken() || getImpersonateToken()) await loadSession();
+  // توجيه المسار المباشر /owner أو /moderator للمخوّلين فقط
+  if (!location.hash) {
+    if ((location.pathname === '/owner' || location.pathname.startsWith('/owner/')) && me && me.role === 'owner') {
+      history.replaceState(null, '', '/#/owner');
+    } else if ((location.pathname === '/moderator' || location.pathname.startsWith('/moderator/')) && me && me.role === 'moderator') {
+      history.replaceState(null, '', '/#/moderator');
+    }
+  }
   // العودة من صفحة بوابة الدفع: /?pay_ref=...#/pay
   const payRef = new URLSearchParams(location.search).get('pay_ref');
   if (payRef) {
@@ -3560,9 +3682,7 @@ const boot = async () => {
 };
 
 const renderShell = (viewKey, data) => {
-  const allNav = [...NAV_LINKS, ...ADMIN_NAV_LINKS];
-  const currentNav = allNav.find(n => n.id === viewKey)
-    || (viewKey === 'admin/client-detail' ? { id: 'admin/clients', icon: 'store', title: 'تفاصيل التاجر' } : NAV_LINKS[0]);
+  const currentNav = NAV_LINKS.find(n => n.id === viewKey) || NAV_LINKS[0];
   const mobileQuickLinks = [
     NAV_LINKS.find(x => x.id === 'dash'),
     NAV_LINKS.find(x => x.id === 'prod'),
@@ -3594,15 +3714,6 @@ const renderShell = (viewKey, data) => {
           ${LOGO_HTML}
           <button class="close-btn mobile-menu-btn" data-a="close-dash-menu" aria-label="إغلاق القائمة">${ico('x', 18)}</button>
         </div>
-        ${me && me.role === 'admin' ? `
-          <div class="nav-sec-label">إدارة المنصة (المشرف)</div>
-          ${ADMIN_NAV_LINKS.map(item => `
-            <a href="#/${item.id}" class="nav-item ${item.id === viewKey || (viewKey === 'admin/client-detail' && item.id === 'admin/clients') ? 'on' : ''}">
-              ${ico(item.icon, 18)}
-              <span>${item.title}</span>
-            </a>
-          `).join('')}
-        ` : ''}
         ${renderNavGroup('ops', 'العمليات اليومية')}
         ${renderNavGroup('fin', 'المالية والمدفوعات')}
         ${renderNavGroup('tools', 'الأدوات والإعدادات')}
@@ -3620,8 +3731,8 @@ const renderShell = (viewKey, data) => {
       <main>
         ${isImpersonating ? `
           <div class="impersonation-banner" role="status">
-            <span>وضع المعاينة للقراءة فقط — أنت تتصفح حساب التاجر «<b>${esc(state.storeName)}</b>» بصلاحية مشرف.</span>
-            <button class="btn btn-er btn-sm" data-a="exit-impersonation">إنهاء المعاينة والعودة للوحة المشرف</button>
+            <span>وضع المعاينة للقراءة فقط — أنت تتصفح حساب التاجر «<b>${esc(state.storeName)}</b>» بصلاحية المالك.</span>
+            <button class="btn btn-er btn-sm" data-a="exit-impersonation">إنهاء المعاينة والعودة للوحة المالك</button>
           </div>
         ` : ''}
         ${me.isDemo ? demoBanner() : ''}
@@ -3640,7 +3751,6 @@ const renderShell = (viewKey, data) => {
               ${[[7, 'آخر ٧ أيام'], [30, 'آخر ٣٠ يومًا'], [90, 'آخر ٩٠ يومًا']].map(r => `<option value="${r[0]}" ${state.range === r[0] ? 'selected' : ''}>${r[1]}</option>`).join('')}
             </select>
           ` : ''}
-          ${me && me.role === 'admin' && !viewKey.startsWith('admin') ? `<a class="btn btn-gh btn-sm" href="#/admin">${ico('shield', 16)} لوحة المشرف</a>` : ''}
           <button class="btn btn-gh btn-sm" data-a="sync-now" title="مزامنة المخزون والطلبات">${ico('sync', 15)} مزامنة الآن</button>
           <button class="btn btn-ac btn-sm" data-a="add-prod">${ico('plus', 15)} نشر منتج</button>
           <button class="btn btn-gh btn-icon" data-a="theme" aria-label="تبديل المظهر" title="تبديل المظهر"><span class="theme-ico-moon">${ico('moon', 17)}</span><span class="theme-ico-sun">${ico('sunMoon', 17)}</span></button>
@@ -3949,26 +4059,30 @@ act('confirm-proceed', async () => {
 actions.auth = (el) => {
   state.authMode = +el.dataset.m;
   const up = state.authMode === 1;
-  openDialog(up ? '🚀 إنشاء حساب تاجر مجاني على OrderFlow' : '👋 مرحبًا بعودتك إلى OrderFlow', `
+  openDialog(up ? 'إنشاء حساب جديد على OrderFlow' : 'تسجيل الدخول إلى OrderFlow', `
     <form data-submit="auth-submit" novalidate>
       <p class="mu" style="margin-bottom:14px;font-size:13.5px">${up
-        ? 'احصل على لوحة تحكم موحدة لأمازون ونون وجوميا بدون بطاقة ائتمان.'
-        : 'سجّل الدخول لمتابعة إدارة مخزونك وطلباتك.'}</p>
+        ? 'أنشئ حساب متجرك الآن؛ سيُراجع فريق الإدارة طلبك ويُفعّل حسابك خلال وقت قصير.'
+        : 'أدخل بريدك الإلكتروني أو رقم الموبايل وكلمة المرور للدخول إلى حسابك.'}</p>
       ${up ? `
         <label for="auth-store">اسم المتجر أو العلامة التجارية</label>
-        <input id="auth-store" maxlength="60" autocomplete="organization" placeholder="مثال: متجر النور للإلكترونيات">` : ''}
-      <label for="auth-id">${up ? 'رقم الموبايل (واتساب)' : 'رقم الموبايل أو البريد الإلكتروني'}</label>
-      <input id="auth-id" dir="ltr" autocomplete="username" ${up ? 'inputmode="tel"' : ''} placeholder="${up ? '010xxxxxxxx' : '010xxxxxxxx أو sales@store.com'}">
+        <input id="auth-store" maxlength="60" autocomplete="organization" placeholder="مثال: متجر النور للإلكترونيات">
+        <label for="auth-fullname">الاسم الكامل (اختياري)</label>
+        <input id="auth-fullname" maxlength="80" autocomplete="name" placeholder="مثال: أحمد محمود">
+        <label for="auth-email">البريد الإلكتروني</label>
+        <input id="auth-email" type="email" dir="ltr" autocomplete="email" placeholder="owner@yourstore.com">` : ''}
+      <label for="auth-id">${up ? 'رقم الموبايل (واتساب)' : 'البريد الإلكتروني أو رقم الموبايل'}</label>
+      <input id="auth-id" dir="ltr" autocomplete="username" ${up ? 'inputmode="tel"' : ''} placeholder="${up ? '010xxxxxxxx' : 'name@store.com أو 010xxxxxxxx'}">
       <div class="row" style="justify-content:space-between">
         <label for="auth-pass" style="margin-bottom:5px">كلمة المرور</label>
         ${!up ? `<a class="pr-tx" style="font-size:12px;font-weight:700;cursor:pointer" data-a="forgot-password">نسيت كلمة المرور؟</a>` : ''}
       </div>
       <input id="auth-pass" type="password" autocomplete="${up ? 'new-password' : 'current-password'}" placeholder="${up ? '٨ أحرف على الأقل' : '••••••••'}">
       <p id="auth-err" class="er-tx" role="alert" style="min-height:22px;margin:2px 0 8px;font-size:13px;font-weight:700"></p>
-      <button class="btn" style="width:100%" type="submit">${up ? 'إنشاء الحساب والدخول للوحة التحكم' : 'تسجيل الدخول'}</button>
+      <button class="btn" style="width:100%" type="submit">${up ? 'إرسال طلب إنشاء الحساب' : 'تسجيل الدخول'}</button>
       <p class="mu ctr" style="margin-top:14px;font-size:13px">
         ${up ? 'لديك حساب بالفعل؟' : 'ليس لديك حساب؟'}
-        <a class="pr-tx" style="font-weight:700;cursor:pointer" data-a="auth" data-m="${up ? 0 : 1}">${up ? 'سجّل الدخول' : 'أنشئ حسابًا مجانيًا'}</a>
+        <a class="pr-tx" style="font-weight:700;cursor:pointer" data-a="auth" data-m="${up ? 0 : 1}">${up ? 'سجّل الدخول' : 'أنشئ حسابًا جديدًا'}</a>
       </p>
     </form>
     <hr style="border:0;border-top:1px solid var(--bd);margin:14px 0">
@@ -3982,17 +4096,49 @@ act('auth-submit', async () => {
   err.textContent = '';
   const id = $('#auth-id').value.trim();
   const password = $('#auth-pass').value;
+  let r;
   try {
-    if (up) await api('POST', '/api/auth/register', { store: $('#auth-store').value.trim(), phone: id, password });
-    else await api('POST', '/api/auth/login', { id, password });
+    if (up) {
+      r = await api('POST', '/api/auth/register', {
+        store: $('#auth-store').value.trim(),
+        fullName: $('#auth-fullname')?.value.trim() || '',
+        email: $('#auth-email')?.value.trim() || '',
+        phone: id,
+        password
+      });
+    } else {
+      r = await api('POST', '/api/auth/login', { id, password });
+    }
   } catch (e) {
     err.textContent = e.message;
     return;
   }
+
+  // دورة حياة حساب العميل: الحساب الجديد قيد المراجعة ولا يُسمح له بالدخول قبل التفعيل
+  if (up && r && r.pending) {
+    openDialog('تم استلام طلب التسجيل بنجاح', `
+      <div class="rbac-pending-box">
+        <div class="rbac-pending-icon" aria-hidden="true">${ico('clock', 26)}</div>
+        <h3 style="margin:0 0 8px">حسابك الآن قيد المراجعة من قِبل الإدارة</h3>
+        <p class="mu" style="font-size:14px;line-height:1.75;margin-bottom:18px">
+          ${esc(r.message || 'تم حفظ بيانات حسابك بحالة «قيد المراجعة». فور موافقة الإدارة وتفعيل الحساب ستتمكن من تسجيل الدخول واستخدام المنصة بشكل طبيعي.')}
+        </p>
+        <div class="row-wrap" style="justify-content:center;gap:10px">
+          <button type="button" class="btn btn-ac" data-a="close-dlg">حسنًا، فهمت</button>
+          <button type="button" class="btn btn-gh" data-a="auth" data-m="0">الذهاب لتسجيل الدخول</button>
+        </div>
+      </div>
+    `);
+    return;
+  }
+
   closeDlg();
   await loadSession();
-  go(me && me.role === 'admin' ? '#/admin' : '#/dash');
-  showToast(up ? 'مرحبًا بك في OrderFlow 🎉 ابدأ بإضافة أول منتج' : 'مرحبًا بعودتك 👋');
+  const target = (r && r.redirectTo) || roleHomeHash(me);
+  go(target);
+  if (me && me.role === 'owner') showToast('مرحبًا بك في لوحة تحكم المالك');
+  else if (me && me.role === 'moderator') showToast('مرحبًا بك في لوحة المشرفين');
+  else showToast(up ? 'مرحبًا بك في OrderFlow' : 'مرحبًا بعودتك');
 });
 
 actions['forgot-password'] = () => {
@@ -5272,8 +5418,8 @@ act('admin-impersonate', async (el) => {
 act('exit-impersonation', async () => {
   setImpersonationToken('');
   await loadSession();
-  showToast('تم الخروج من وضع التصفح والعودة إلى حساب الإدارة ✓');
-  go('#/admin/clients');
+  showToast('تم الخروج من وضع التصفح والعودة إلى لوحة المالك ✓');
+  go('#/owner/clients');
 });
 
 act('admin-toggle-client-status', async (el) => {
@@ -5534,5 +5680,34 @@ setInterval(() => {
     if (el) el.textContent = fmtNum(heroLiveState[mk].orders) + ' طلب اليوم';
   });
 }, 3500);
+
+window.addEventListener('focus', runSessionCheck);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') runSessionCheck();
+});
+
+if (window.OrderFlowRBAC && typeof window.OrderFlowRBAC.registerRbacViews === 'function') {
+  window.OrderFlowRBAC.registerRbacViews(views, loaders, actions, inputs, {
+    api,
+    state,
+    renderTable,
+    fmtNum,
+    fmtEGP,
+    fmtDate,
+    timeAgo,
+    emptyState,
+    errorState,
+    openDialog,
+    openConfirmDialog,
+    closeDlg,
+    showToast,
+    renderApp,
+    act,
+    ico,
+    setImpersonationToken,
+    loadSession,
+    go
+  });
+}
 
 boot();

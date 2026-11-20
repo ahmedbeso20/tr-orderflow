@@ -6,7 +6,8 @@ const { PLANS } = require('../domain');
 const DAY_MS = 86400_000;
 
 module.exports = (r, app) => {
-  const { q, tx, session, notify, logAudit, model } = app;
+  const { q, tx, cipher, session, notify, logAudit, model } = app;
+  const dec = (v) => (cipher ? cipher.decrypt(v) : String(v || ''));
 
   const clientRowOf = (u) => ({
     id: u.id,
@@ -20,8 +21,8 @@ module.exports = (r, app) => {
     planName: (PLANS[u.plan] || PLANS.free).name,
     planCycle: u.plan_cycle || 'monthly',
     planExpiresAt: u.plan_expires_at || null,
-    taxId: u.tax_id || '',
-    instaPayHandle: u.instapay || '',
+    taxId: dec(u.tax_id),
+    instaPayHandle: dec(u.instapay),
     isDemo: Boolean(u.is_demo),
     productsCount: u.products_count ?? q('SELECT COUNT(*) n FROM products WHERE user_id = ?').get(u.id).n,
     approvedProductsCount: u.approved_products_count ?? q("SELECT COUNT(*) n FROM products WHERE user_id = ? AND approval_status = 'approved'").get(u.id).n,
@@ -32,7 +33,7 @@ module.exports = (r, app) => {
   });
 
   const findClient = (id) => {
-    const u = q('SELECT * FROM users WHERE id = ?').get(Number(id) || 0);
+    const u = q("SELECT * FROM users WHERE id = ? AND role = 'client'").get(Number(id) || 0);
     if (!u) throw new HttpError(404, 'العميل غير موجود');
     return u;
   };
@@ -42,7 +43,9 @@ module.exports = (r, app) => {
     const stats = q(`SELECT
         COUNT(*) totalUsers,
         COALESCE(SUM(role = 'client' AND is_demo = 0), 0) totalClients,
+        COALESCE(SUM(role = 'client' AND is_demo = 0 AND status = 'pending'), 0) pendingClients,
         COALESCE(SUM(role = 'client' AND is_demo = 0 AND status = 'active'), 0) activeClients,
+        COALESCE(SUM(role = 'client' AND is_demo = 0 AND status = 'rejected'), 0) rejectedClients,
         COALESCE(SUM(role = 'client' AND is_demo = 0 AND status = 'suspended'), 0) suspendedClients,
         COALESCE(SUM(is_demo = 1), 0) demoUsers,
         COALESCE(SUM(role = 'client' AND is_demo = 0 AND plan = 'free'), 0) freeCount,
@@ -72,13 +75,15 @@ module.exports = (r, app) => {
       FROM plan_payments WHERE user_id IN (SELECT id FROM users WHERE is_demo = 0)`).get();
 
     const recentClients = q("SELECT * FROM users WHERE role = 'client' AND is_demo = 0 ORDER BY id DESC LIMIT 6").all().map(clientRowOf);
-    const recentAudit = q(`SELECT a.*, u.store_name AS admin_name, u.phone AS admin_phone
+    const recentAudit = q(`SELECT a.*, u.store_name AS admin_name, u.phone AS admin_phone, u.email AS admin_email, u.role AS user_role
       FROM audit_log a LEFT JOIN users u ON u.id = a.admin_id
       ORDER BY a.id DESC LIMIT 10`).all().map(model.auditOf);
 
     const kpis = {
       totalClients: stats.totalClients,
+      pendingClients: stats.pendingClients,
       activeClients: stats.activeClients,
+      rejectedClients: stats.rejectedClients,
       suspendedClients: stats.suspendedClients,
       demoUsers: stats.demoUsers,
       pendingProducts: prodStats.pendingProducts,
@@ -106,19 +111,13 @@ module.exports = (r, app) => {
       recentClients,
       recentAudit
     };
-  }, { admin: true });
+  }, { owner: true });
 
-  // 2. قائمة وبحث التجار/العملاء
+  // 2. قائمة وبحث التجار/العملاء (لا تشمل المالك أو المشرفين أبدًا)
   r.get('/api/admin/clients', ({ query }) => {
-    const where = ['u.is_demo = 0'];
+    const where = ['u.is_demo = 0', "u.role = 'client'"];
     const args = [];
-    if (query.role && ['client', 'admin'].includes(query.role)) {
-      where.push('u.role = ?');
-      args.push(query.role);
-    } else if (!query.includeAdmins) {
-      where.push("u.role = 'client'");
-    }
-    if (query.status && ['active', 'suspended'].includes(query.status)) {
+    if (query.status && ['pending', 'active', 'rejected', 'suspended'].includes(query.status)) {
       where.push('u.status = ?');
       args.push(query.status);
     }
@@ -147,7 +146,7 @@ module.exports = (r, app) => {
       ORDER BY u.id DESC LIMIT ? OFFSET ?`).all(...args, perPage, (page - 1) * perPage);
 
     return { clients: rows.map(clientRowOf), total, page, pages };
-  }, { admin: true });
+  }, { owner: true });
 
   // 3. تفاصيل عميل محدد
   r.get('/api/admin/clients/:id', ({ params }) => {
@@ -170,19 +169,21 @@ module.exports = (r, app) => {
       payments,
       auditLogs
     };
-  }, { admin: true });
+  }, { owner: true });
 
   // 4. تعليق أو إعادة تفعيل حساب عميل
   const setClientStatus = (adminUser, targetId, nextStatus, reason, ip) => {
     const u = findClient(targetId);
     if (u.id === adminUser.id) throw bad('لا يمكنك تعليق حسابك الشخصي');
-    const st = oneOf(nextStatus, ['active', 'suspended'], 'حالة الحساب');
-    if (st === 'suspended') {
-      q('UPDATE users SET status = ?, token_ver = token_ver + 1 WHERE id = ?').run('suspended', u.id);
+    const st = oneOf(nextStatus, ['active', 'suspended', 'rejected', 'pending'], 'حالة الحساب');
+    if (st === 'suspended' || st === 'rejected') {
+      q('UPDATE users SET status = ?, reject_reason = ?, token_ver = token_ver + 1, reviewed_by = ?, reviewed_at = ? WHERE id = ?')
+        .run(st, reason || '', adminUser.id, nowIso(), u.id);
     } else {
-      q('UPDATE users SET status = ? WHERE id = ?').run('active', u.id);
+      q('UPDATE users SET status = ?, reject_reason = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?')
+        .run(st, '', adminUser.id, nowIso(), u.id);
     }
-    const action = st === 'suspended' ? 'client.suspend' : 'client.reactivate';
+    const action = st === 'suspended' ? 'client.suspend' : st === 'rejected' ? 'client.reject' : 'client.reactivate';
     logAudit(adminUser.id, action, 'user', u.id, { status: st, reason: reason || '', storeName: u.store_name }, ip);
     notify(
       u.id,

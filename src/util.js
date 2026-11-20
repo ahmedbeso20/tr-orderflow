@@ -42,10 +42,19 @@ function email(v) {
   if (s.length > 120 || !EMAIL_RE.test(s)) throw bad('البريد الإلكتروني غير صحيح');
   return s;
 }
+const COMMON_WEAK_PASSWORDS = new Set([
+  '12345678', '123456789', '1234567890', '01234567', '012345678',
+  'password', 'password1', 'password123', 'pass1234', 'qwerty12',
+  'qwerty123', 'admin123', 'admin1234', 'welcome1', 'welcome123',
+  'iloveyou', 'abc12345', 'abcdef12', 'letmein1', 'orderflow'
+]);
 function password(v, phoneNo) {
   const s = String(v ?? '');
   if (s.length < 8 || s.length > 128) throw bad('كلمة المرور يجب أن تكون ٨ أحرف على الأقل');
   if (s === phoneNo) throw bad('اختر كلمة مرور مختلفة عن رقم الموبايل');
+  if (COMMON_WEAK_PASSWORDS.has(s.trim().toLowerCase()) || /^(.)\1+$/.test(s)) {
+    throw bad('كلمة المرور ضعيفة جدًا أو شائعة، اختر كلمة مرور أقوى تحتوي على أحرف وأرقام');
+  }
   return s;
 }
 const oneOf = (v, list, name) => {

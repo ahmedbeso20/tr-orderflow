@@ -25,6 +25,8 @@ class Client {
 
 async function start(opts = {}) {
   const app = createApp({ dbFile: ':memory:', secret: 's'.repeat(48), trustProxy: true, geminiKey: '', ...opts });
+  // اختبارات المزايا العامة تختبر المنتجات والطلبات والدفع مباشرة؛ دورة اعتماد الحسابات تُختبر بالكامل في test/rbac.test.js
+  app.db.prepare("UPDATE platform_settings SET value = '0' WHERE key = 'require_client_approval'").run();
   await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${app.server.address().port}`;
   let n = 0;
@@ -532,16 +534,16 @@ test('دور الإدارة (Admin Role): إنشاء أول مشرف من متغ
   assert.equal(meClient.role, 'client');
   assert.equal(meClient.status, 'active');
 
-  assert.equal((await client.get('/api/admin/dashboard')).status, 403);
-  assert.equal((await client.get('/api/admin/clients')).status, 403);
-  assert.equal((await client.get('/api/admin/approvals')).status, 403);
-  assert.equal((await client.post('/api/admin/coupons', { code: 'HACK50', pct: 50 })).status, 403);
+  assert.equal((await client.get('/api/admin/dashboard')).status, 404);
+  assert.equal((await client.get('/api/admin/clients')).status, 404);
+  assert.equal((await client.get('/api/admin/approvals')).status, 404);
+  assert.equal((await client.post('/api/admin/coupons', { code: 'HACK50', pct: 50 })).status, 404);
 
-  // 2) المشرف الأول المنشأ من ADMIN_PHONE و ADMIN_PASSWORD يستطيع الدخول والوصول لـ /api/admin
+  // 2) المالك الوحيد المنشأ من متغيرات البيئة يستطيع الدخول والوصول لـ /api/admin و /api/owner
   const admin = s.client();
   const adminLogin = await admin.post('/api/auth/login', { id: '01099998888', password: 'adminPassword123' });
   assert.equal(adminLogin.status, 200);
-  assert.equal(adminLogin.data.me.role, 'admin');
+  assert.equal(adminLogin.data.me.role, 'owner');
 
   const dash = await admin.get('/api/admin/dashboard');
   assert.equal(dash.status, 200);
