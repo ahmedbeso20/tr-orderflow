@@ -340,7 +340,30 @@ INSERT INTO platform_settings (key, value, updated_at) VALUES
   ('require_client_approval', '1', '2026-01-01T00:00:00.000Z'),
   ('maintenance_notice', '', '2026-01-01T00:00:00.000Z');
 `
-}];
+}, `
+-- اتصالات API المشفرة لمنصات البيع الخمس (أمازون · نون · جوميا · ترينديول · كنز) وتتبع المزامنة الحقيقية
+CREATE TABLE marketplace_connections (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  platform TEXT NOT NULL CHECK (platform IN ('a', 'n', 'j', 't', 'k')),
+  enabled INTEGER NOT NULL DEFAULT 1,
+  environment TEXT NOT NULL DEFAULT 'production' CHECK (environment IN ('production', 'sandbox')),
+  creds_enc TEXT NOT NULL DEFAULT '',
+  endpoint_url TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'disconnected' CHECK (status IN ('disconnected', 'configured', 'connected', 'error')),
+  last_tested_at TEXT,
+  last_sync_at TEXT,
+  last_error TEXT NOT NULL DEFAULT '',
+  stats_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (user_id, platform)
+);
+CREATE INDEX marketplace_connections_user ON marketplace_connections(user_id);
+
+ALTER TABLE orders ADD COLUMN external_ref TEXT NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX orders_user_market_extref ON orders(user_id, market, external_ref) WHERE external_ref <> '';
+`];
 
 const fs = require('node:fs');
 

@@ -94,9 +94,13 @@ const MARKETPLACES_EXTRA = {
   k: { name: 'كنز مصر (Kenzz)', domain: 'Kenzz.com', short: 'ك', bg: '#0EA5C6', color: '#ffffff' }
 };
 
-const renderMarketChip = (key) => {
+const renderMarketChip = (key, size = 30) => {
   const m = MARKETPLACES[key] || MARKETPLACES_EXTRA[key];
   if (!m) return '';
+  const logoHtml = typeof GROWTH.renderPlatformLogo === 'function' ? GROWTH.renderPlatformLogo(key, 'icon') : '';
+  if (logoHtml) {
+    return `<span class="mk-badge mk-badge--logo mk-badge--${key}" title="${m.name}" aria-label="${m.name}" style="width:${size}px;height:${size}px">${logoHtml}</span>`;
+  }
   return `<b class="mk-badge" title="${m.name}" style="background:${m.bg};color:${m.color}">${m.short}</b>`;
 };
 
@@ -425,6 +429,8 @@ function applySession(d) {
   planInfo = d.plan;
   aiCache = d.ai || {};
   Object.assign(state, d.settings);
+  state.marketplaceConnections = d.marketplaceConnections || [];
+  state.marketplaceSchemas = d.marketplaceSchemas || {};
   if (state.instaPayHandle) pgState.instaPayAddress = state.instaPayHandle;
   if (state.storePhone) {
     pgState.walletPhone = state.storePhone;
@@ -446,7 +452,7 @@ function clearSession() {
   ordersById.clear();
   try { localStorage.removeItem('omni_token'); } catch (_) {}
   try { sessionStorage.removeItem('omni_impersonate_token'); } catch (_) {}
-  Object.assign(state, { prodQuery: '', prodStockFilter: 'all', orderQuery: '', orderStatusFilter: -1, orderPage: 1 });
+  Object.assign(state, { prodQuery: '', prodStockFilter: 'all', orderQuery: '', orderStatusFilter: -1, orderPage: 1, marketplaceConnections: [], marketplaceSchemas: {} });
 }
 
 function sessionExpired(customMsg) {
@@ -913,7 +919,9 @@ const renderLanding = () => `
       <div class="partner-strip-grid">
         ${(GROWTH.PARTNER_CERTIFICATIONS || []).map((p) => `
           <div class="partner-cert-card">
-            <span class="mk-badge" style="background:${p.accent};color:${p.textColor};width:36px;height:36px;font-size:15px">${p.short}</span>
+            <span class="partner-logo-tile partner-logo-tile--${p.key}${p.bleed ? ' partner-logo-tile--bleed' : ''}" style="background:${p.tileBg || '#FFFFFF'}" aria-label="${p.name}" title="${p.name}">
+              ${typeof GROWTH.renderPlatformLogo === 'function' ? GROWTH.renderPlatformLogo(p.key, 'icon') : p.short}
+            </span>
             <div>
               <b style="font-size:14px;display:block">${p.name}</b>
               <small class="mu">${p.badge}</small>
@@ -1996,27 +2004,119 @@ const INTEGRATIONS_GROUPS = [
   }
 ];
 
-views.int = () => INTEGRATIONS_GROUPS.map(g => `
-  <h3 style="margin:20px 0 10px">${g.title}</h3>
-  <div class="grid-cards">
-    ${g.items.map(item => {
-      const isOn = !!state.integrations[item.key];
-      return `
-        <div class="card row">
-          ${(MARKETPLACES[item.key] || MARKETPLACES_EXTRA[item.key]) ? renderMarketChip(item.key) : ''}
-          <div class="sp">
-            <b>${item.name}</b>
-            <p class="mu" style="font-size:12.5px">${item.sub}</p>
-            <small class="${isOn ? 'ok-tx' : 'mu'}" style="font-weight:700">
-              ${isOn ? 'متصل · آخر مزامنة: ' + lastSyncLabel() : 'غير متصل'}
-            </small>
+const API_PLATFORM_KEYS = ['a', 'n', 'j', 't', 'k'];
+
+function getPlatformConnection(key) {
+  return (state.marketplaceConnections || []).find((c) => c.platform === key) || null;
+}
+
+function formatApiIdentity(key, conn) {
+  if (!conn || !conn.credentials) return '';
+  const c = conn.credentials;
+  if (key === 'a' && c.sellerId) return `Seller ID: ${c.sellerId}`;
+  if (key === 'n' && c.projectCode) return `Project: ${c.projectCode}`;
+  if (key === 'j' && c.shopId) return `Shop: ${c.shopId}`;
+  if (key === 't' && c.supplierId) return `Supplier #${c.supplierId}`;
+  if (key === 'k' && c.storeId) return `Store: ${c.storeId}`;
+  return '';
+}
+
+function renderApiStatusLine(conn, isOn) {
+  if (!conn || !conn.configured) {
+    return `<span class="mp-api-pill mp-api-pill--idle">غير مربوط بـ API</span>
+      <small class="mu">${isOn ? 'تفعيل محلي فقط — أضف مفتاح API للسحب الفوري' : 'أضف مفتاح API للاتصال المباشر بالمنصة'}</small>`;
+  }
+  if (conn.status === 'connected') {
+    const st = conn.stats || {};
+    const statsTxt = (st.importedProducts || st.importedOrders || st.updatedProducts)
+      ? ` · آخر سحب: +${fmtNum(st.importedProducts || 0)} منتج، +${fmtNum(st.importedOrders || 0)} طلب`
+      : '';
+    return `<span class="mp-api-pill mp-api-pill--ok">متصل بالـ API ✓</span>
+      <small class="ok-tx" style="font-weight:600">${conn.lastSyncAt ? 'آخر مزامنة: ' + fmtDateTime(conn.lastSyncAt) : 'تم التحقق من الاتصال بنجاح'}${statsTxt}</small>`;
+  }
+  if (conn.status === 'error') {
+    return `<span class="mp-api-pill mp-api-pill--err">خطأ في الاتصال</span>
+      <small class="er-tx" style="font-weight:600">${esc(conn.lastError || 'تحقق من صحة مفاتيح API')}</small>`;
+  }
+  return `<span class="mp-api-pill mp-api-pill--warn">مفتاح API محفوظ</span>
+    <small class="mu">اضغط «اختبار الاتصال» أو «سحب البيانات» لبدء التشغيل الفوري</small>`;
+}
+
+views.int = () => {
+  const conns = state.marketplaceConnections || [];
+  const connectedApiCount = conns.filter((c) => c.configured).length;
+  return `
+    <div class="card mp-api-banner">
+      <div class="row-wrap" style="gap:14px">
+        <div class="sp">
+          <div class="row" style="gap:8px;margin-bottom:6px">
+            <span class="meta-inline pr">${ico('lock', 14)} ربط API مباشر ومشفّر بـ AES-256-GCM</span>
+            <span class="badge ${connectedApiCount ? 'ok' : ''}">${fmtNum(connectedApiCount)} / ٥ منصات مربوطة بـ API</span>
           </div>
-          <span class="switch ${isOn ? 'on' : ''}" data-a="toggle-int" data-k="${item.key}" title="تفعيل أو إيقاف الربط"></span>
+          <h3 style="margin:0 0 4px;font-size:17px">أدخل مفتاح API لكل منصة ليبدأ الموقع بالاتصال وسحب بياناتك فورًا</h3>
+          <p class="mu" style="font-size:13px;margin:0;max-width:74ch">تُحفظ مفاتيحك مشفّرة بالكامل على الخادم ولا تُعرض بالنص الصريح أبدًا. بمجرد إدخال مفتاح أي منصة يمكنك اختبار الاتصال وسحب المنتجات والطلبات والمخزون مباشرةً.</p>
         </div>
-      `;
-    }).join('')}
-  </div>
-`).join('');
+        <button type="button" class="btn btn-ac btn-sm" data-a="sync-now">${ico('sync', 15)} مزامنة جميع المنصات المتصلة</button>
+      </div>
+    </div>
+
+    ${INTEGRATIONS_GROUPS.map((g, gi) => `
+      <h3 style="margin:22px 0 12px">${g.title}</h3>
+      <div class="${gi === 0 ? 'mp-api-grid' : 'grid-cards'}">
+        ${g.items.map((item) => {
+          const isOn = !!state.integrations[item.key];
+          if (API_PLATFORM_KEYS.includes(item.key)) {
+            const conn = getPlatformConnection(item.key);
+            const idLabel = formatApiIdentity(item.key, conn);
+            return `
+              <div class="card mp-api-card" data-platform="${item.key}">
+                <div class="mp-api-head">
+                  ${renderMarketChip(item.key, 42)}
+                  <div class="sp" style="min-width:0">
+                    <b style="display:block;font-size:15px">${item.name}</b>
+                    <p class="mu" style="font-size:12.5px;margin:2px 0 0">${item.sub}</p>
+                    ${idLabel ? `<div class="mp-api-id" dir="ltr">${esc(idLabel)}${conn?.environment === 'sandbox' ? ' · Sandbox' : ''}</div>` : ''}
+                  </div>
+                  <button type="button" role="switch" aria-checked="${isOn ? 'true' : 'false'}" class="switch ${isOn ? 'on' : ''}" data-a="toggle-int" data-k="${item.key}" title="تفعيل أو إيقاف الربط" aria-label="تفعيل أو إيقاف ${item.name}"></button>
+                </div>
+
+                <div class="mp-api-status">
+                  ${renderApiStatusLine(conn, isOn)}
+                </div>
+
+                <div class="mp-api-actions">
+                  <button type="button" class="btn btn-sm ${conn?.configured ? 'btn-gh' : 'btn-ac'}" data-a="open-api-cfg" data-k="${item.key}">
+                    ${ico('lock', 14)} ${conn?.configured ? 'تعديل مفاتيح API' : 'إعداد مفتاح API'}
+                  </button>
+                  ${conn?.configured ? `
+                    <button type="button" class="btn btn-sm btn-gh" data-a="test-api-conn" data-k="${item.key}">
+                      ${ico('zap', 14)} اختبار الاتصال
+                    </button>
+                    <button type="button" class="btn btn-sm btn-ok" data-a="sync-api-conn" data-k="${item.key}">
+                      ${ico('sync', 14)} سحب البيانات
+                    </button>
+                  ` : ''}
+                </div>
+              </div>
+            `;
+          }
+          return `
+            <div class="card row">
+              <div class="sp">
+                <b>${item.name}</b>
+                <p class="mu" style="font-size:12.5px">${item.sub}</p>
+                <small class="${isOn ? 'ok-tx' : 'mu'}" style="font-weight:700">
+                  ${isOn ? 'متصل · آخر مزامنة: ' + lastSyncLabel() : 'غير متصل'}
+                </small>
+              </div>
+              <button type="button" role="switch" aria-checked="${isOn ? 'true' : 'false'}" class="switch ${isOn ? 'on' : ''}" data-a="toggle-int" data-k="${item.key}" title="تفعيل أو إيقاف الربط" aria-label="تفعيل أو إيقاف ${item.name}"></button>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `).join('')}
+  `;
+};
 
 // 5.7.0 صفحة خدمات الخبراء وإدارة الحسابات (#/services)
 views.services = (d) => {
@@ -5254,7 +5354,7 @@ act('copy-tx', async (el) => {
   showToast((await copyText(t.innerText.trim())) ? '📋 تم نسخ النص إلى الحافظة' : '⚠️ تعذر النسخ');
 });
 
-/* التكاملات والإعدادات والحساب */
+/* التكاملات ومفاتيح API للمنصات والإعدادات والحساب */
 act('toggle-int', async (el) => {
   const on = !state.integrations[el.dataset.k];
   const r = await api('PUT', '/api/settings/integrations', { key: el.dataset.k, on });
@@ -5262,6 +5362,177 @@ act('toggle-int', async (el) => {
   showToast(on ? 'تم تفعيل الربط والمزامنة ✓' : 'تم إيقاف الربط مؤقتًا');
   renderApp(true);
 });
+
+async function ensureApiSchemasLoaded() {
+  if (!state.marketplaceSchemas || !Object.keys(state.marketplaceSchemas).length) {
+    const r = await api('GET', '/api/integrations/connections');
+    state.marketplaceSchemas = r.schemas || {};
+    state.marketplaceConnections = r.connections || [];
+  }
+}
+
+act('open-api-cfg', async (el) => {
+  const key = el.dataset.k;
+  await ensureApiSchemasLoaded();
+  const schema = (state.marketplaceSchemas || {})[key];
+  if (!schema) return showToast('تعذّر تحميل إعدادات هذه المنصة');
+  const conn = getPlatformConnection(key);
+  const creds = (conn && conn.credentials) || {};
+  const isDemo = Boolean(me && me.isDemo);
+
+  const fieldsHtml = (schema.fields || []).map((f) => {
+    const id = `api-f-${key}-${f.name}`;
+    const curVal = creds[f.name];
+    if (f.secret) {
+      const saved = curVal && typeof curVal === 'object' && curVal.configured;
+      const masked = saved ? curVal.masked : '';
+      return `
+        <div class="api-field-row">
+          <div class="row" style="justify-content:space-between;margin-bottom:4px">
+            <label for="${id}" style="margin:0">${esc(f.label)} ${f.required && !saved ? '<span class="er-tx">*</span>' : ''}</label>
+            ${saved ? `<span class="api-saved-pill" dir="ltr">محفوظ ومشفّر (${esc(masked)})</span>` : ''}
+          </div>
+          ${f.multiline
+            ? `<textarea id="${id}" name="${f.name}" rows="3" dir="ltr" placeholder="${saved ? 'اتركه فارغًا للإبقاء على المفتاح المشفّر الحالي أو الصق مفتاحًا جديدًا' : esc(f.placeholder || '')}" ${isDemo ? 'disabled' : ''}></textarea>`
+            : `<div class="api-secret-wrap">
+                <input id="${id}" name="${f.name}" type="password" autocomplete="new-password" dir="ltr" placeholder="${saved ? 'محفوظ ومشفّر — اتركه فارغًا للإبقاء عليه' : esc(f.placeholder || '')}" ${isDemo ? 'disabled' : ''}>
+                <button type="button" class="btn btn-gh btn-sm api-eye-btn" data-a="toggle-api-secret" data-target="${id}" aria-label="إظهار أو إخفاء القيمة">إظهار</button>
+              </div>`
+          }
+        </div>
+      `;
+    }
+    const textVal = typeof curVal === 'string' ? curVal : (f.defaultValue || '');
+    return `
+      <div class="api-field-row">
+        <label for="${id}">${esc(f.label)} ${f.required ? '<span class="er-tx">*</span>' : ''}</label>
+        <input id="${id}" name="${f.name}" type="text" dir="ltr" value="${esc(textVal)}" placeholder="${esc(f.placeholder || '')}" ${isDemo ? 'disabled' : ''}>
+      </div>
+    `;
+  }).join('');
+
+  const body = `
+    <div class="api-modal-lead">
+      ${renderMarketChip(key, 42)}
+      <div class="sp">
+        <b style="display:block;font-size:15px">${esc(schema.name)}</b>
+        <p class="mu" style="font-size:12.5px;margin:2px 0 0">${esc(schema.docsHint || '')}</p>
+      </div>
+    </div>
+
+    ${isDemo ? `
+      <div class="api-hint-box api-hint-box--warn">
+        <b>أنت في الحساب التجريبي:</b> يمكنك استعراض جميع حقول الربط المطلوبة هنا، ولحفظ مفاتيح API حقيقية لمتجرك أنشئ حسابك المجاني أولًا (تُشفّر مفاتيحك تلقائيًا بـ AES-256-GCM).
+      </div>
+    ` : `
+      <div class="api-hint-box">
+        ${ico('shield', 15)} <span>تُشفّر جميع المفاتيح والأسرار فورًا في قاعدة البيانات عبر <b>AES-256-GCM</b> وتُستخدم من الخادم فقط للاتصال الآمن بسيرفرات المنصة.</span>
+      </div>
+    `}
+
+    <form id="api-conn-form" data-platform="${key}">
+      <div class="api-field-row">
+        <label for="api-env-${key}">بيئة التشغيل (Environment)</label>
+        <select id="api-env-${key}" name="environment" ${isDemo ? 'disabled' : ''}>
+          <option value="production" ${(conn?.environment || 'production') === 'production' ? 'selected' : ''}>الإنتاج الفعلي (Production — بيانات المتجر الحقيقية)</option>
+          <option value="sandbox" ${conn?.environment === 'sandbox' ? 'selected' : ''}>بيئة الاختبار (Sandbox)</option>
+        </select>
+      </div>
+      ${fieldsHtml}
+    </form>
+
+    <div class="row-wrap" style="justify-content:space-between;margin-top:18px;gap:10px">
+      <div>
+        ${conn?.configured && !isDemo ? `<button type="button" class="btn btn-er btn-sm" data-a="delete-api-conn" data-k="${key}">حذف المفاتيح وفصل الربط</button>` : ''}
+      </div>
+      <div class="row-wrap" style="gap:8px">
+        <button type="button" class="btn btn-gh btn-sm" data-a="close-dlg">إغلاق</button>
+        ${!isDemo ? `
+          <button type="button" class="btn btn-gh btn-sm" data-a="save-api-conn-only" data-k="${key}">حفظ فقط</button>
+          <button type="button" class="btn btn-ac btn-sm" data-a="save-api-conn" data-k="${key}">${ico('zap', 14)} حفظ واختبار الاتصال</button>
+        ` : ''}
+      </div>
+    </div>
+  `;
+
+  openDialog(`إعداد ربط API — ${schema.name}`, body, false);
+});
+
+actions['toggle-api-secret'] = (el) => {
+  const inp = document.getElementById(el.dataset.target);
+  if (!inp) return;
+  const isPw = inp.type === 'password';
+  inp.type = isPw ? 'text' : 'password';
+  el.textContent = isPw ? 'إخفاء' : 'إظهار';
+};
+
+async function submitApiConnection(key, testNow) {
+  const form = document.getElementById('api-conn-form');
+  if (!form) return;
+  const schema = (state.marketplaceSchemas || {})[key];
+  if (!schema) return;
+  const credentials = {};
+  for (const f of schema.fields || []) {
+    const el = form.querySelector(`[name="${f.name}"]`);
+    if (el) credentials[f.name] = el.value.trim();
+  }
+  const envEl = form.querySelector('[name="environment"]');
+  const environment = envEl ? envEl.value : 'production';
+  const r = await api('PUT', `/api/integrations/connections/${key}`, {
+    credentials,
+    environment,
+    enabled: true,
+    testNow
+  });
+  state.integrations = r.integrations || state.integrations;
+  state.marketplaceConnections = r.connections || state.marketplaceConnections;
+  closeDlg();
+  if (r.testResult) {
+    showToast(r.testResult.ok ? `✓ ${r.testResult.message}` : `⚠️ تم حفظ المفاتيح لكن فشل الاختبار: ${r.testResult.message}`, 5200);
+  } else {
+    showToast('🔒 تم حفظ وتشفير مفاتيح API بنجاح ✓', 3600);
+  }
+  renderApp(true);
+}
+
+act('save-api-conn', async (el) => submitApiConnection(el.dataset.k, true));
+act('save-api-conn-only', async (el) => submitApiConnection(el.dataset.k, false));
+
+act('test-api-conn', async (el) => {
+  const key = el.dataset.k;
+  const r = await api('POST', `/api/integrations/connections/${key}/test`);
+  state.marketplaceConnections = r.connections || state.marketplaceConnections;
+  showToast(r.ok ? `✓ ${r.message}` : `⚠️ ${r.message}`, 4800);
+  renderApp(true);
+});
+
+act('sync-api-conn', async (el) => {
+  const key = el.dataset.k;
+  const r = await api('POST', `/api/integrations/connections/${key}/sync`);
+  state.marketplaceConnections = r.connections || state.marketplaceConnections;
+  await loadSession();
+  showToast(`⟳ ${r.message || 'تم سحب بيانات المنصة بنجاح ✓'}`, 4500);
+  renderApp(true);
+});
+
+actions['delete-api-conn'] = (el) => {
+  const key = el.dataset.k;
+  const schema = (state.marketplaceSchemas || {})[key];
+  openConfirmDialog(
+    'حذف مفاتيح API وفصل المنصة',
+    `هل تريد حذف مفاتيح API المشفّرة الخاصة بمنصة "${schema?.name || key}" وإيقاف المزامنة التلقائية معها؟`,
+    'نعم، احذف المفاتيح',
+    true,
+    async () => {
+      const r = await api('DELETE', `/api/integrations/connections/${key}`);
+      state.integrations = r.integrations || state.integrations;
+      state.marketplaceConnections = r.connections || state.marketplaceConnections;
+      closeDlg();
+      showToast('تم حذف مفاتيح API وفصل الربط بنجاح');
+      renderApp(true);
+    }
+  );
+};
 
 act('toggle-notif', async (el) => {
   const r = await api('PUT', '/api/settings/notifications', { key: el.dataset.k, on: !state.notifications[el.dataset.k] });
@@ -5273,7 +5544,11 @@ act('toggle-notif', async (el) => {
 act('sync-now', async () => {
   const r = await api('POST', '/api/sync');
   state.lastSyncAt = r.lastSyncAt;
-  showToast(r.message || `⟳ تمت المزامنة: ${fmtNum(r.products)} منتج على ${fmtNum(r.markets.length)} أسواق مفعّلة ✓`, 3500);
+  if (r.connections) state.marketplaceConnections = r.connections;
+  if (Array.isArray(r.liveResults) && r.liveResults.length) {
+    await loadSession();
+  }
+  showToast(r.message || `⟳ تمت المزامنة: ${fmtNum(r.products)} منتج على ${fmtNum(r.markets.length)} أسواق مفعّلة ✓`, 4000);
   renderApp(true);
 });
 

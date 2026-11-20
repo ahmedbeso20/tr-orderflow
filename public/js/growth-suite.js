@@ -15,14 +15,66 @@
   'use strict';
 
   /**
-   * 1. الشركاء والتكاملات الإقليمية المعتمدة (أمازون · نون · جوميا · ترينديول · كنز)
+   * 1. الأيقونات والشعارات الرسمية المعتمدة للمنصات كما تظهر في مواقعها وتطبيقاتها الرسمية (أمازون · نون · جوميا · ترينديول · كنز)
    */
+  const PLATFORM_LOGO_ASSETS = {
+    a: {
+      full: '/assets/logos/amazon.svg',
+      icon: '/assets/logos/amazon-icon.svg',
+      alt: 'Amazon Egypt',
+      stageBg: '#FFFFFF',
+      tileBg: '#FFFFFF',
+      bleed: false
+    },
+    n: {
+      full: '/assets/logos/noon.svg',
+      icon: '/assets/logos/noon-icon.svg',
+      alt: 'Noon',
+      stageBg: '#FCE819',
+      tileBg: '#FCE819',
+      bleed: true
+    },
+    j: {
+      full: '/assets/logos/jumia-wordmark.png',
+      icon: '/assets/logos/jumia-icon.jpg',
+      alt: 'Jumia',
+      stageBg: '#FFFFFF',
+      tileBg: '#F68B1E',
+      bleed: true
+    },
+    t: {
+      full: '/assets/logos/trendyol.svg',
+      icon: '/assets/logos/trendyol-icon.jpg',
+      alt: 'Trendyol',
+      stageBg: '#FFFFFF',
+      tileBg: '#F27A1A',
+      bleed: true
+    },
+    k: {
+      full: '/assets/logos/kenzz.svg',
+      icon: '/assets/logos/kenzz-icon.png',
+      alt: 'Kenzz',
+      stageBg: '#FFFFFF',
+      tileBg: '#FFFFFF',
+      bleed: false
+    }
+  };
+
+  function renderPlatformLogo(key, variant = 'icon') {
+    const asset = PLATFORM_LOGO_ASSETS[key];
+    if (!asset) return '';
+    const mode = variant === 'full' ? 'full' : 'icon';
+    const src = mode === 'full' ? asset.full : asset.icon;
+    const bleedCls = mode === 'icon' && asset.bleed ? ' platform-logo-img--bleed' : '';
+    return `<img class="platform-logo-img platform-logo-img--${mode} platform-logo-img--${key}${bleedCls}" src="${src}" alt="${asset.alt}" loading="eager" decoding="async">`;
+  }
+
   const PARTNER_CERTIFICATIONS = [
-    { key: 'a', code: 'Amazon SPN', name: 'Amazon Egypt', badge: 'إدارة المبيعات', accent: '#1E293B', textColor: '#ffffff', short: 'A' },
-    { key: 'n', code: 'Noon FBPI', name: 'Noon', badge: 'إدارة المبيعات', accent: '#F2C94C', textColor: '#1E293B', short: 'N' },
-    { key: 'j', code: 'Jumia AMP', name: 'Jumia', badge: 'إدارة المبيعات', accent: '#F27A1A', textColor: '#ffffff', short: 'J' },
-    { key: 't', code: 'Trendyol API', name: 'Trendyol', badge: 'إدارة المبيعات', accent: '#E85D04', textColor: '#ffffff', short: 'T' },
-    { key: 'k', code: 'Kenzz Egypt', name: 'Kenzz', badge: 'إدارة المبيعات', accent: '#0EA5C6', textColor: '#ffffff', short: 'K' }
+    { key: 'a', code: 'Amazon SPN', name: 'Amazon Egypt', badge: 'إدارة المبيعات', accent: '#131921', textColor: '#ffffff', short: 'A', stageBg: PLATFORM_LOGO_ASSETS.a.stageBg, tileBg: PLATFORM_LOGO_ASSETS.a.tileBg, bleed: PLATFORM_LOGO_ASSETS.a.bleed, logoSrc: PLATFORM_LOGO_ASSETS.a.full, iconSrc: PLATFORM_LOGO_ASSETS.a.icon },
+    { key: 'n', code: 'Noon FBPI', name: 'Noon', badge: 'إدارة المبيعات', accent: '#FCE819', textColor: '#1E1E24', short: 'N', stageBg: PLATFORM_LOGO_ASSETS.n.stageBg, tileBg: PLATFORM_LOGO_ASSETS.n.tileBg, bleed: PLATFORM_LOGO_ASSETS.n.bleed, logoSrc: PLATFORM_LOGO_ASSETS.n.full, iconSrc: PLATFORM_LOGO_ASSETS.n.icon },
+    { key: 'j', code: 'Jumia AMP', name: 'Jumia', badge: 'إدارة المبيعات', accent: '#F68B1E', textColor: '#ffffff', short: 'J', stageBg: PLATFORM_LOGO_ASSETS.j.stageBg, tileBg: PLATFORM_LOGO_ASSETS.j.tileBg, bleed: PLATFORM_LOGO_ASSETS.j.bleed, logoSrc: PLATFORM_LOGO_ASSETS.j.full, iconSrc: PLATFORM_LOGO_ASSETS.j.icon },
+    { key: 't', code: 'Trendyol API', name: 'Trendyol', badge: 'إدارة المبيعات', accent: '#F27A1A', textColor: '#ffffff', short: 'T', stageBg: PLATFORM_LOGO_ASSETS.t.stageBg, tileBg: PLATFORM_LOGO_ASSETS.t.tileBg, bleed: PLATFORM_LOGO_ASSETS.t.bleed, logoSrc: PLATFORM_LOGO_ASSETS.t.full, iconSrc: PLATFORM_LOGO_ASSETS.t.icon },
+    { key: 'k', code: 'Kenzz Egypt', name: 'Kenzz', badge: 'إدارة المبيعات', accent: '#6A00D5', textColor: '#ffffff', short: 'K', stageBg: PLATFORM_LOGO_ASSETS.k.stageBg, tileBg: PLATFORM_LOGO_ASSETS.k.tileBg, bleed: PLATFORM_LOGO_ASSETS.k.bleed, logoSrc: PLATFORM_LOGO_ASSETS.k.full, iconSrc: PLATFORM_LOGO_ASSETS.k.icon }
   ];
 
   /**
@@ -421,6 +473,9 @@
   }
 
   return {
+    PLATFORM_LOGO_ASSETS,
+    PLATFORM_LOGOS: PLATFORM_LOGO_ASSETS,
+    renderPlatformLogo,
     PARTNER_CERTIFICATIONS,
     SOLUTIONS_TABS,
     EXPERT_SERVICES_UI,

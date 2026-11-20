@@ -6,7 +6,9 @@ const VAT = 0.14;
 const MARKETS = {
   a: { name: 'أمازون مصر', fee: 12 },
   n: { name: 'نون مصر', fee: 10 },
-  j: { name: 'جوميا', fee: 11 }
+  j: { name: 'جوميا', fee: 11 },
+  t: { name: 'ترينديول', fee: 15 },
+  k: { name: 'كنز مصر', fee: 12 }
 };
 
 // رسوم الشحن التقديرية للطلب (عدّلها لتطابق عقدك مع شركة الشحن)
@@ -23,8 +25,8 @@ const PAY_BUCKET = { [COD]: 'cod', 'فودافون كاش': 'wallet', 'إنست�
 
 const PLANS = {
   free: { id: 'free', name: 'باقة البداية', products: 50, markets: 2, ai: 15, priceMonthly: 0, priceYearly: 0 },
-  pro: { id: 'pro', name: 'باقة التاجر المحترف', products: 1500, markets: 3, ai: 200, priceMonthly: 1000, priceYearly: 10000 },
-  business: { id: 'business', name: 'باقة الشركات والمخازن الكبرى', products: null, markets: 3, ai: 1000, priceMonthly: 3000, priceYearly: 30000 }
+  pro: { id: 'pro', name: 'باقة التاجر المحترف', products: 1500, markets: 5, ai: 200, priceMonthly: 1000, priceYearly: 10000 },
+  business: { id: 'business', name: 'باقة الشركات والمخازن الكبرى', products: null, markets: 5, ai: 1000, priceMonthly: 3000, priceYearly: 30000 }
 };
 
 const GATEWAY_METHODS = {
@@ -120,7 +122,7 @@ const EXPERT_SERVICES = {
 };
 
 // عمولة السوق + ضريبة القيمة المضافة عليها كنسبة من إجمالي الطلب (جزء SQL)
-const FEE_RATE_SQL = `(CASE market WHEN 'a' THEN ${MARKETS.a.fee} WHEN 'n' THEN ${MARKETS.n.fee} ELSE ${MARKETS.j.fee} END) / 100.0 * ${1 + VAT}`;
+const FEE_RATE_SQL = `(CASE market WHEN 'a' THEN ${MARKETS.a.fee} WHEN 'n' THEN ${MARKETS.n.fee} WHEN 'j' THEN ${MARKETS.j.fee} WHEN 't' THEN ${MARKETS.t.fee} WHEN 'k' THEN ${MARKETS.k.fee} ELSE ${MARKETS.j.fee} END) / 100.0 * ${1 + VAT}`;
 
 module.exports = {
   VAT, MARKETS, COURIERS, COURIER_BY_KEY, COD, PAYMENTS, PAY_BUCKET,

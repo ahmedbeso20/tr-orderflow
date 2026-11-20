@@ -4,11 +4,11 @@ const { HttpError, bad, text, phone, email, password, oneOf, latin, nowIso, pars
 const { PLANS, INTEGRATION_KEYS, NOTIFICATION_KEYS } = require('../domain');
 const { seedDemo } = require('../seed');
 
-const MARKET_KEYS = ['a', 'n', 'j'];
+const MARKET_KEYS = ['a', 'n', 'j', 't', 'k'];
 const DAY_MS = 86400_000;
 
 module.exports = (r, app) => {
-  const { q, cfg, limiter, cipher, session, mailer, notify, logAudit, model } = app;
+  const { q, cfg, limiter, cipher, session, mailer, notify, logAudit, model, connectors } = app;
   const reload = (id) => q('SELECT * FROM users WHERE id = ?').get(id);
   const noDemo = (u) => { if (u.is_demo) throw new HttpError(403, 'هذا الإجراء غير متاح في الحساب التجريبي'); };
 
@@ -16,7 +16,9 @@ module.exports = (r, app) => {
   r.get('/api/bootstrap', ({ user }) => ({
     me: model.meOf(user), settings: model.settingsOf(user), ...model.meta(user),
     products: model.productsOf(user.id), ai: parseJson(user.ai_cache, {}),
-    payments: model.paymentsOf(user.id)
+    payments: model.paymentsOf(user.id),
+    marketplaceSchemas: connectors.PLATFORM_SCHEMAS,
+    marketplaceConnections: connectors.listForUser(user.id)
   }));
 
   r.put('/api/settings', ({ user, body }) => {
@@ -105,21 +107,41 @@ module.exports = (r, app) => {
     return { notifications: cur };
   });
 
-  // نقطة الربط مع المنصات: تزامن العناصر المعتمدة فقط عبر قنوات أمازون ونون وجوميا
-  r.post('/api/sync', ({ user }) => {
+  // نقطة الربط مع المنصات: تسحب البيانات الحقيقية لكل منصة مربوطة بـ API وتزامن العناصر المعتمدة
+  r.post('/api/sync', async ({ user }) => {
     const markets = MARKET_KEYS.filter((k) => parseJson(user.integrations, {})[k]);
     if (!markets.length) throw new HttpError(409, 'فعّل ربط سوق واحد على الأقل من صفحة التكاملات أولًا');
     const now = nowIso();
+    const names = { a: 'أمازون مصر', n: 'نون مصر', j: 'جوميا', t: 'ترينديول', k: 'كنز مصر' };
+
+    const liveResults = [];
+    for (const m of markets) {
+      const res = await connectors.syncPlatform(user.id, m);
+      if (res && res.live) liveResults.push(res);
+    }
+
     q('UPDATE users SET last_sync_at = ? WHERE id = ?').run(now, user.id);
     const prodCount = q("SELECT COUNT(*) n FROM products WHERE user_id = ? AND approval_status = 'approved'").get(user.id).n;
     const totalStock = q("SELECT COALESCE(SUM(stock), 0) n FROM products WHERE user_id = ? AND approval_status = 'approved'").get(user.id).n;
     const pendingApprovalProducts = q("SELECT COUNT(*) n FROM products WHERE user_id = ? AND approval_status = 'pending'").get(user.id).n;
     const lowStock = q("SELECT COUNT(*) n FROM products WHERE user_id = ? AND approval_status = 'approved' AND stock <= 5").get(user.id).n;
     const pendingOrders = q("SELECT COUNT(*) n FROM orders WHERE user_id = ? AND approval_status = 'approved' AND status = 0").get(user.id).n;
+    const liveByKey = new Map(liveResults.map((x) => [x.platform, x]));
     const marketDetails = markets.map((m) => {
-      const names = { a: 'أمازون مصر', n: 'نون مصر', j: 'جوميا' };
-      return { key: m, name: names[m] || m, status: 'متصل ومزامَن بنجاح', syncedAt: now };
+      const live = liveByKey.get(m);
+      if (live) {
+        return {
+          key: m,
+          name: names[m] || m,
+          mode: 'live_api',
+          ok: live.ok,
+          status: live.ok ? `مزامنة API حية (+${live.importedProducts} منتج، +${live.importedOrders} طلب)` : `خطأ API: ${live.error}`,
+          syncedAt: now
+        };
+      }
+      return { key: m, name: names[m] || m, mode: 'local', ok: true, status: 'متصل ومزامَن محليًا', syncedAt: now };
     });
+    const importedTotal = liveResults.reduce((s, r) => s + (r.importedProducts || 0) + (r.importedOrders || 0), 0);
     return {
       lastSyncAt: now,
       markets,
@@ -131,7 +153,11 @@ module.exports = (r, app) => {
       lowStock,
       pendingOrders,
       marketDetails,
-      message: `تمت مزامنة ${prodCount} منتجًا معتمدًا (${totalStock} قطعة) و${pendingOrders} طلبًا معتمدًا بنجاح عبر ${markets.length} منصات.`
+      liveResults,
+      connections: connectors.listForUser(user.id),
+      message: liveResults.length
+        ? `تمت المزامنة الحية عبر ${liveResults.length} منصة API (${importedTotal} عنصر جديد) — إجمالي ${prodCount} منتجًا و${pendingOrders} طلبًا.`
+        : `تمت مزامنة ${prodCount} منتجًا معتمدًا (${totalStock} قطعة) و${pendingOrders} طلبًا معتمدًا بنجاح عبر ${markets.length} منصات.`
     };
   });
 

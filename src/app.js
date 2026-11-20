@@ -10,6 +10,7 @@ const { HttpError, phone, email, clean, esc, nowIso } = require('./util');
 const { createFieldCipher, sanitizePayload } = require('./security');
 const { createPayments } = require('./payments');
 const { createMailer } = require('./mailer');
+const { createConnectors } = require('./connectors');
 
 /** يضمن وجود حساب المالك الوحيد فقط (1 Owner Max — محمي بفهرس فريد في قاعدة البيانات) */
 function ensureSingleOwner(cfg, q) {
@@ -131,10 +132,11 @@ function createApp(overrides = {}) {
     model: createModel(store.q, cipher)
   };
   app.payments = createPayments(app);
+  app.connectors = createConnectors(app);
   const router = createRouter();
   const serveStatic = createStatic(cfg.publicDir);
 
-  for (const name of ['auth', 'catalog', 'orders', 'finance', 'account', 'billing', 'ai', 'services', 'owner', 'moderator', 'admin']) {
+  for (const name of ['auth', 'catalog', 'orders', 'finance', 'account', 'integrations', 'billing', 'ai', 'services', 'owner', 'moderator', 'admin']) {
     require(`./routes/${name}`)(router, app);
   }
   router.get('/api/health', () => ({ ok: true }), { auth: false });

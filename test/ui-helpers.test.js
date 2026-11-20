@@ -85,6 +85,16 @@ test('OrderFlowGrowth exposes partner certifications, 3-tab solutions, expert se
   assert.ok(growth.PARTNER_CERTIFICATIONS.some((p) => p.code.includes('FBPI')));
   assert.ok(growth.PARTNER_CERTIFICATIONS.some((p) => p.code.includes('Trendyol')));
   assert.ok(growth.PARTNER_CERTIFICATIONS.some((p) => p.code.includes('Kenzz')));
+  const fs = require('node:fs');
+  const path = require('node:path');
+  for (const p of growth.PARTNER_CERTIFICATIONS) {
+    const fullHtml = growth.renderPlatformLogo(p.key, 'full');
+    const iconHtml = growth.renderPlatformLogo(p.key, 'icon');
+    assert.ok(fullHtml.startsWith('<img ') && fullHtml.includes('/assets/logos/'), `expected official brand logo img for ${p.key}`);
+    assert.ok(iconHtml.startsWith('<img ') && iconHtml.includes('/assets/logos/'), `expected official brand icon img for ${p.key}`);
+    assert.ok(fs.existsSync(path.join(__dirname, '..', 'public', p.logoSrc)), `missing logo file on disk: ${p.logoSrc}`);
+    assert.ok(fs.existsSync(path.join(__dirname, '..', 'public', p.iconSrc)), `missing icon file on disk: ${p.iconSrc}`);
+  }
 
   assert.equal(growth.SOLUTIONS_TABS.length, 3);
   assert.ok(growth.EXPERT_SERVICES_UI.length >= 6);
