@@ -32,7 +32,8 @@ const PLANS = {
 const GATEWAY_METHODS = {
   card: { id: 'card', name: 'بطاقة بنكية (Visa / Mastercard / ميزة)', short: 'بطاقة بنكية', badge: 'تفعيل فوري 3DS' },
   instapay: { id: 'instapay', name: 'إنستاباي (InstaPay Egypt)', short: 'إنستاباي', badge: 'تحويل لحظي ٠٪ رسوم' },
-  wallet: { id: 'wallet', name: 'محفظة إلكترونية (فودافون / اتصالات / أورنج)', short: 'محفظة ذكية', badge: 'تأكيد برمز OTP' },
+  wallet: { id: 'wallet', name: 'محفظة إلكترونية (فودافون / اتصالات / أورنج / WE)', short: 'محفظة إلكترونية', badge: 'محفظة ذكية' },
+  kashier: { id: 'kashier', name: 'بوابة كاشير الخارجية (Kashier)', short: 'كاشير (Kashier)', badge: 'بوابة دفع خارجية' },
   fawry: { id: 'fawry', name: 'فوري باي (Fawry Pay)', short: 'فوري باي', badge: 'كود مرجعي فوري' }
 };
 

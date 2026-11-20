@@ -219,27 +219,17 @@ const growthState = {
   ]
 };
 
-// حالة شباك الدفع الإلكتروني التفاعلي (OrderFlow Payment Gateway Counter)
+// حالة الاشتراك والدفع الخارجي (المحفظة الإلكترونية أو بوابة كاشير)
 const pgState = {
   plan: 'pro',
   cycle: 'monthly',
-  method: 'card',
+  method: 'kashier',
   couponInput: '',
   appliedCoupon: '',
   couponDesc: '',
-  cardHolder: '',
-  cardNumber: '',
-  cardExpiry: '',
-  cardCvv: '',
-  instaPayAddress: '',
-  transferRef: '',
-  walletProvider: 'فودافون كاش',
-  walletPhone: '',
-  walletOtp: '',
-  fawryPhone: '',
   lastReceipt: null,
   idemKey: '',          // مفتاح منع التكرار: يمنع الخصم المزدوج عند الضغط مرتين أو إعادة الإرسال
-  gateway: { loaded: false, enabled: true, sandbox: true, collectsCardData: true, methods: [{ id: 'card' }, { id: 'instapay' }, { id: 'wallet' }, { id: 'fawry' }] }
+  gateway: { loaded: false, enabled: true, sandbox: false, collectsCardData: false, externalGatewayReady: false, walletNumber: '', methods: [{ id: 'wallet' }, { id: 'kashier' }] }
 };
 
 // بيانات المعاينة التفاعلية الحية في الهيرو
@@ -706,7 +696,7 @@ const PLANS = [
 ];
 
 const FAQS = [
-  ['هل أحتاج بطاقة بنكية للبدء؟', 'لا، باقة البداية مجانية تمامًا. وعند الترقية يمكنك الدفع عبر إنستاباي أو فودافون كاش أو فوري أو أي بطاقة محلية.'],
+  ['هل أحتاج بطاقة بنكية للبدء؟', 'لا، باقة البداية مجانية تمامًا. وعند الترقية يمكنك الدفع عبر المحافظ الإلكترونية (فودافون كاش وإنستاباي) أو بوابة دفع خارجية مثل كاشير (Kashier).'],
   ['كيف تحمي المنصة مخزوني من البيع بالخطأ؟', 'أي طلب جديد على منصة يُخصم فورًا من باقي المنصات، وأي مرتجع يعود للمخزون تلقائيًا.'],
   ['هل تحسب المنصة العمولة وضريبة ١٤٪؟', 'نعم، تحسب الحاسبة والتقارير عمولة كل سوق + ١٤٪ ضريبة + الشحن + نسبة المرتجعات تلقائيًا.'],
   ['هل يمكنني التجربة قبل التسجيل؟', 'نعم، اضغط «جرّب اللوحة الآن» لفتح حساب تجريبي جاهز ببيانات حقيقية فورًا.']
@@ -1095,7 +1085,7 @@ const renderLanding = () => `
         <div>
           <span class="sec-kicker">الباقات والأسعار</span>
           <h2>أسعار واضحة بالجنيه المصري</h2>
-          <p class="mu">ابدأ مجانًا ورقِّ وقتما تحتاج عبر إنستاباي أو المحافظ الإلكترونية أو فوري.</p>
+          <p class="mu">ابدأ مجانًا ورقِّ وقتما تحتاج عبر المحافظ الإلكترونية أو بوابة كاشير الخارجية.</p>
         </div>
         <span class="sp"></span>
         <div class="seg-rail" role="group" aria-label="دورة الفوترة">
@@ -1133,12 +1123,12 @@ const renderLanding = () => `
 
       <div class="card ai-glow" style="margin-top:24px;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
         <div>
-          <b style="display:block;margin-bottom:4px">الدفع الفوري عبر OrderFlow Pay</b>
+          <b style="display:block;margin-bottom:4px">الدفع عبر المحافظ الإلكترونية أو بوابة دفع خارجية (كاشير — Kashier)</b>
           <p class="mu" style="font-size:13.5px;margin:0">
-            إنستاباي · فودافون كاش · فوري · بطاقات بنكية — استخدم كود <code style="font-family:var(--font-mono);color:var(--pr);font-weight:700">WELCOME20</code> لخصم ٢٠٪.
+            فودافون كاش · اتصالات كاش · أورنج كاش · إنستاباي أو عبر بوابة كاشير (Kashier) الخارجية الآمنة.
           </p>
         </div>
-        <button type="button" class="btn btn-ac" data-a="open-pay-window" data-p="pro">${ico('pay', 16)} شباك الدفع</button>
+        <button type="button" class="btn btn-ac" data-a="open-pay-window" data-p="pro">${ico('pay', 16)} تفاصيل الاشتراك والدفع</button>
       </div>
     </div>
   </section>
@@ -2265,334 +2255,112 @@ const loaders = {
 };
 
 /* ==========================================================================
-   5.7.1 شباك الدفع الإلكتروني وبوابة الاشتراكات (OrderFlow Pay Counter & View)
+   5.7.1 الاشتراك والدفع الخارجي (المحفظة الإلكترونية أو بوابة كاشير — Kashier)
    ========================================================================== */
-const PG_METHOD_META = {
-  card: ['pay', 'بطاقة بنكية', 'Visa / ميزة'],
-  instapay: ['zap', 'إنستاباي', 'تحويل لحظي'],
-  wallet: ['smartphone', 'محفظة ذكية', 'فودافون / اتصالات'],
-  fawry: ['store', 'فوري باي', 'كود مرجعي']
-};
-
-/** خوارزمية Luhn — فحص أولي على المتصفح (الخادم يعيد الفحص دائمًا) */
-const luhnOk = (d) => {
-  let sum = 0, dbl = false;
-  for (let i = d.length - 1; i >= 0; i--) {
-    let n = d.charCodeAt(i) - 48;
-    if (dbl) { n *= 2; if (n > 9) n -= 9; }
-    sum += n; dbl = !dbl;
-  }
-  return sum % 10 === 0;
-};
-const pgCardBrand = (d) => (/^507803|^9\d{15}$/.test(d) ? 'MEEZA ميزة' : d.startsWith('4') ? 'VISA' : /^(5[1-5]|2[2-7])/.test(d) ? 'MASTERCARD' : 'BANK CARD');
-
 const ensurePgGateway = async () => {
   if (pgState.gateway.loaded) return;
   try { pgState.gateway = { ...(await api('GET', '/api/billing/config')), loaded: true }; } catch (_) { /* نبقي الإعداد الافتراضي */ }
 };
-const pgMethodIds = () => pgState.gateway.methods.map((x) => x.id).filter((id) => PG_METHOD_META[id]);
-
-function renderPgMethodForm() {
-  const g = pgState.gateway;
-  // بوابة مستضافة: لا حقول حساسة عندنا إطلاقًا — التحويل لصفحة البوابة المرخّصة
-  if (!g.collectsCardData) {
-    return `
-      <div class="pg-redirect-note" role="note">
-        <span class="pg-redirect-ic" aria-hidden="true">🔐</span>
-        <div>
-          <b>ستنتقل إلى صفحة الدفع الآمنة</b>
-          <p class="mu">تُدخل بيانات الدفع لدى بوابة الدفع المرخّصة مباشرةً، ولا تمر بيانات بطاقتك أو محفظتك بخوادمنا. يُفعَّل اشتراكك تلقائيًا فور تأكيد البوابة للعملية.</p>
-        </div>
-      </div>`;
-  }
-  const m = pgState.method;
-  const banner = `<div class="pg-sandbox-banner" role="note">${ico('shield', 16)}<span>بيئة تجريبية — لا يُخصم أي مبلغ حقيقي. بطاقة النجاح <bdi dir="ltr">4242 4242 4242 4242</bdi> · بطاقة الرفض <bdi dir="ltr">4000 0000 0000 0002</bdi></span></div>`;
-
-  if (m === 'card') {
-    const raw = String(pgState.cardNumber || '').replace(/\D/g, '');
-    const formatted = (raw.padEnd(16, '•').match(/.{1,4}/g) || []).join(' ');
-    return `
-      ${banner}
-      <div class="pg-bank-card" aria-hidden="true">
-        <div class="row" style="justify-content:space-between">
-          <span class="pg-card-chip"></span>
-          <b class="pg-card-brand" id="pg-card-preview-brand">${pgCardBrand(raw)}</b>
-        </div>
-        <div class="pg-card-num" id="pg-card-preview-num" dir="ltr">${esc(formatted)}</div>
-        <div class="row" style="justify-content:space-between">
-          <div><small class="pg-card-cap">CARD HOLDER</small><b id="pg-card-preview-holder" dir="ltr">${esc(pgState.cardHolder || 'MERCHANT NAME')}</b></div>
-          <div style="text-align:end"><small class="pg-card-cap">EXPIRES</small><b id="pg-card-preview-exp" dir="ltr">${esc(pgState.cardExpiry || 'MM/YY')}</b></div>
-        </div>
-      </div>
-
-      <div class="row-wrap" style="justify-content:space-between;margin-bottom:6px">
-        <label for="pg-card-holder" style="margin:0">اسم حامل البطاقة (كما يظهر عليها)</label>
-        <button type="button" class="btn btn-gh btn-sm" data-a="pg-fill-demo-card">⚡ تعبئة بطاقة تجريبية</button>
-      </div>
-      <input id="pg-card-holder" dir="ltr" autocomplete="cc-name" placeholder="AHMED ELNOOR" value="${esc(pgState.cardHolder)}" data-i="pg-card-input">
-
-      <label for="pg-card-num">رقم البطاقة</label>
-      <input id="pg-card-num" dir="ltr" inputmode="numeric" autocomplete="cc-number" maxlength="19" placeholder="0000 0000 0000 0000" value="${esc(pgState.cardNumber)}" data-i="pg-card-input">
-
-      <div class="grid-equal" style="gap:12px">
-        <div>
-          <label for="pg-card-exp">تاريخ الانتهاء</label>
-          <input id="pg-card-exp" dir="ltr" inputmode="numeric" autocomplete="cc-exp" maxlength="5" placeholder="MM/YY" value="${esc(pgState.cardExpiry)}" data-i="pg-card-input">
-        </div>
-        <div>
-          <label for="pg-card-cvv">رمز الأمان CVV</label>
-          <input id="pg-card-cvv" dir="ltr" type="password" inputmode="numeric" autocomplete="cc-csc" maxlength="4" placeholder="•••" value="${esc(pgState.cardCvv)}" data-i="pg-card-input">
-        </div>
-      </div>`;
-  }
-
-  if (m === 'instapay') {
-    return `
-      ${banner}
-      <div class="pg-ipa-box">
-        <div class="row-wrap" style="justify-content:space-between;margin-bottom:6px">
-          <div>
-            <small class="mu" style="display:block">عنوان الدفع الفوري للمنصة (InstaPay IPA)</small>
-            <b dir="ltr" class="pg-ipa-addr">orderflow.pay@instapay</b>
-          </div>
-          <button type="button" class="btn btn-gh btn-sm" data-a="pg-copy-ipa" data-v="orderflow.pay@instapay">📋 نسخ العنوان</button>
-        </div>
-        <small class="mu">حوّل قيمة الاشتراك من تطبيق إنستاباي ثم أدخل عنوانك أو رقم الموبايل المحوّل منه.</small>
-      </div>
-
-      <label for="pg-ipa-addr">عنوان InstaPay الخاص بك أو رقم الموبايل</label>
-      <input id="pg-ipa-addr" dir="ltr" placeholder="username@instapay أو 010xxxxxxxx" value="${esc(pgState.instaPayAddress)}" data-i="pg-field-sync">
-
-      <label for="pg-ipa-ref">رقم مرجع التحويل (اختياري)</label>
-      <input id="pg-ipa-ref" dir="ltr" placeholder="IPN-000000" value="${esc(pgState.transferRef)}" data-i="pg-field-sync">`;
-  }
-
-  if (m === 'wallet') {
-    return `
-      ${banner}
-      <label for="pg-wallet-prov">شبكة المحفظة الذكية</label>
-      <select id="pg-wallet-prov" data-i="pg-field-sync">
-        ${['فودافون كاش', 'اتصالات كاش', 'أورنج كاش', 'WE Pay'].map((w) => `<option ${pgState.walletProvider === w ? 'selected' : ''}>${w}</option>`).join('')}
-      </select>
-
-      <label for="pg-wallet-phone">رقم موبايل المحفظة</label>
-      <input id="pg-wallet-phone" dir="ltr" inputmode="tel" autocomplete="tel" placeholder="01012345678" value="${esc(pgState.walletPhone)}" data-i="pg-field-sync">
-
-      <div class="row-wrap" style="justify-content:space-between;margin-bottom:6px">
-        <label for="pg-wallet-otp" style="margin:0">كود التأكيد OTP</label>
-        <button type="button" class="btn btn-gh btn-sm" data-a="pg-send-otp">📲 إرسال كود تجريبي</button>
-      </div>
-      <input id="pg-wallet-otp" dir="ltr" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••" value="${esc(pgState.walletOtp)}" data-i="pg-field-sync">`;
-  }
-
-  return `
-    ${banner}
-    <div class="pg-fawry-ticket">
-      <small class="mu" style="display:block;font-weight:700">كود الدفع المرجعي عبر فوري</small>
-      <div class="pg-fawry-code" dir="ltr">••• ••• •••</div>
-      <span class="badge wn">يُصدَر الكود بعد تأكيد الطلب ويصلح ٤٨ ساعة في منافذ فوري وتطبيق MyFawry</span>
-    </div>
-
-    <label for="pg-fawry-phone">رقم الموبايل المسجّل لإشعار السداد</label>
-    <input id="pg-fawry-phone" dir="ltr" inputmode="tel" autocomplete="tel" placeholder="01012345678" value="${esc(pgState.fawryPhone)}" data-i="pg-field-sync">`;
-}
 
 function renderPaymentGatewayCounter(inModal = false) {
   const q = getPgQuote();
-  const receipt = pgState.lastReceipt;
-  const g = pgState.gateway;
-  if (!g.enabled) {
-    return `<div class="pg-unavailable"><span aria-hidden="true">🛠️</span><h3>الدفع الإلكتروني غير مُفعّل حاليًا</h3><p class="mu">نعمل على تفعيل بوابة الدفع. يمكنك الاستمرار بالباقة المجانية الآن أو التواصل معنا لتفعيل باقتك يدويًا.</p></div>`;
-  }
-  const ids = pgMethodIds();
-  if (!ids.includes(pgState.method)) pgState.method = ids[0] || 'card';
-  const submitLabel = g.collectsCardData ? `🔒 إتمام الدفع الآمن (${fmtEGP(q.total)})` : `🔒 المتابعة إلى صفحة الدفع الآمنة (${fmtEGP(q.total)})`;
-
-  if (receipt) {
-    return `
-      <div style="padding:28px 24px;text-align:center">
-        <div style="width:58px;height:58px;border-radius:50%;background:var(--ok-soft);color:var(--ok);display:inline-grid;place-items:center;font-size:28px;font-weight:900;margin-bottom:12px">✓</div>
-        <h3 style="font-size:21px;margin-bottom:6px">تم سداد الاشتراك وتفعيل «${esc(receipt.planName)}» بنجاح!</h3>
-        <p class="mu" style="margin-bottom:18px">تم توثيق العملية عبر شباك الدفع الإلكتروني وإصدار فاتورتك الضريبية المعتمدة.</p>
-
-        <div class="card" style="max-width:520px;margin:0 auto 18px;text-align:start;background:var(--bg)">
-          <div class="row" style="padding:6px 0;border-bottom:1px dashed var(--bd)">
-            <span class="mu">رقم العملية المرجعي</span>
-            <span class="sp"></span>
-            <code dir="ltr" style="font-weight:800;color:var(--pr)">${esc(receipt.txRef)}</code>
-          </div>
-          <div class="row" style="padding:6px 0;border-bottom:1px dashed var(--bd)">
-            <span class="mu">الباقة والدورة</span>
-            <span class="sp"></span>
-            <b>${esc(receipt.planName)} (${receipt.cycle === 'yearly' ? 'سنوي' : 'شهري'})</b>
-          </div>
-          <div class="row" style="padding:6px 0;border-bottom:1px dashed var(--bd)">
-            <span class="mu">وسيلة السداد</span>
-            <span class="sp"></span>
-            <b>${esc(receipt.methodShort)} — <span dir="ltr">${esc(receipt.payerInfo)}</span></b>
-          </div>
-          <div class="row" style="padding:6px 0;border-bottom:1px dashed var(--bd)">
-            <span class="mu">سريان الاشتراك حتى</span>
-            <span class="sp"></span>
-            <b>${fmtDate(receipt.periodEnd)}</b>
-          </div>
-          <div class="row" style="padding:8px 0 2px">
-            <b>الإجمالي المسدَّد (شامل ١٤٪ ق.م)</b>
-            <span class="sp"></span>
-            <b class="ok-tx" style="font-size:20px">${fmtEGP(receipt.amount)}</b>
-          </div>
-        </div>
-
-        <div class="row-wrap" style="justify-content:center;gap:10px">
-          <button type="button" class="btn" data-a="open-receipt" data-id="${receipt.id}">🧾 فتح وطباعة الإيصال الضريبي (QR) ↗</button>
-          <button type="button" class="btn btn-gh" data-a="pg-new-payment">إجراء عملية دفع أخرى</button>
-          ${inModal ? '<button type="button" class="btn btn-ac" data-a="pg-go-dash">الانتقال إلى لوحة التحكم ◂</button>' : ''}
-        </div>
-      </div>
-    `;
-  }
+  const g = pgState.gateway || {};
+  const extReady = Boolean(g.externalGatewayReady);
+  const walletNum = String(g.walletNumber || '').trim();
 
   return `
-    <form class="pg-window" data-submit="pg-submit-checkout" novalidate>
-      <div class="pg-main">
-        <div class="row-wrap" style="justify-content:space-between;margin-bottom:12px">
-          <div>
-            <div class="pg-step"><span class="pg-step-n">١</span><div><b>اختر الباقة ودورة الفوترة</b><small class="mu">يمكنك الترقية أو التجديد في أي وقت</small></div></div>
-          </div>
-          <div class="row" style="background:var(--bg);padding:4px;border-radius:9px;border:1px solid var(--bd);gap:4px">
-            <button type="button" class="pill ${pgState.cycle === 'monthly' ? 'on' : ''}" style="border:none;min-height:30px;padding:4px 11px;font-size:12px" data-a="pg-select-cycle" data-v="monthly">شهري</button>
-            <button type="button" class="pill ${pgState.cycle === 'yearly' ? 'on' : ''}" style="border:none;min-height:30px;padding:4px 11px;font-size:12px" data-a="pg-select-cycle" data-v="yearly">سنوي (وفّر شهرين)</button>
-          </div>
-        </div>
-
-        <div class="pg-plan-tabs">
-          ${PLANS.filter((x) => x.price > 0).map((p) => {
-            const pPrice = pgState.cycle === 'yearly' ? p.price * 10 : p.price;
-            const active = pgState.plan === p.id;
-            return `
-              <button type="button" class="pg-plan-card ${active ? 'active' : ''}" data-a="pg-select-plan" data-p="${p.id}">
-                <div class="row" style="justify-content:space-between;width:100%">
-                  <b style="font-size:13.5px">${p.name}</b>
-                  ${p.popular ? renderBadge('الأشهر', 'pr') : ''}
-                </div>
-                <div style="font-size:20px;font-weight:900;color:var(--pr)">
-                  ${fmtEGP(pPrice)} <small class="mu" style="font-size:11.5px;font-weight:600">/ ${pgState.cycle === 'yearly' ? 'سنة' : 'شهر'}</small>
-                </div>
-                <small class="mu" style="font-size:11.5px">${p.feats[0]} · ${p.feats[1]}</small>
-              </button>
-            `;
-          }).join('')}
-        </div>
-
-        <div class="pg-step"><span class="pg-step-n">٢</span><div><b>اختر وسيلة الدفع</b></div></div>
-        <div class="pg-method-tabs" role="radiogroup" aria-label="وسائل الدفع المتاحة">
-          ${ids.map((k) => { const [ic, title, sub] = PG_METHOD_META[k]; return `
-            <button type="button" role="radio" aria-checked="${pgState.method === k}" class="pg-method-btn ${pgState.method === k ? 'active' : ''}" data-a="pg-select-method" data-m="${k}">
-              <span class="pg-method-ic" aria-hidden="true">${ico(ic, 18)}</span>
-              <span>${title}</span>
-              <small class="mu">${sub}</small>
-            </button>`; }).join('')}
-        </div>
-
-        <div id="pg-method-body">
-          ${renderPgMethodForm()}
-        </div>
-
-        <p id="pg-err" class="pg-err er-tx" role="alert"></p>
-
-        <button type="submit" class="btn btn-ac btn-lg pg-submit" id="btn-pg-submit" data-label="${esc(submitLabel)}">
-          ${submitLabel}
-        </button>
-      </div>
-
-      <div class="pg-side">
+    <div class="pg-ext-wrap" style="padding:${inModal ? '4px' : '22px'}">
+      <div class="row-wrap" style="justify-content:space-between;margin-bottom:14px;gap:10px">
         <div>
-          <div class="row" style="justify-content:space-between;margin-bottom:12px">
-            <b style="font-size:15px">ملخص فاتورة الاشتراك</b>
-            ${renderBadge('شامل الضريبة ١٤٪', 'ok')}
-          </div>
-
-          <div class="pg-summary-box">
-            <div class="row" style="padding:6px 0;border-bottom:1px solid var(--bd)">
-              <div>
-                <b style="display:block;font-size:14px">${esc(q.plan.name)}</b>
-                <small class="mu">${q.isYearly ? 'دورة فوترة سنوية (١٢ شهرًا — شهران مجانًا)' : 'دورة فوترة شهرية (٣٠ يومًا)'}</small>
-              </div>
-              <span class="sp"></span>
-              <b style="white-space:nowrap">${fmtEGP(q.basePrice)}</b>
-            </div>
-
-            <div style="padding:10px 0;border-bottom:1px solid var(--bd)">
-              <label for="pg-coupon-inp" style="font-size:12px;margin-bottom:4px">هل لديك كود خصم ترويجي؟</label>
-              <div class="pg-coupon-row">
-                <input id="pg-coupon-inp" dir="ltr" placeholder="مثال: WELCOME20" value="${esc(pgState.couponInput)}" data-i="pg-coupon-typing">
-                <button type="button" class="btn btn-gh btn-sm" data-a="pg-apply-coupon">تطبيق</button>
-              </div>
-              <div class="row-wrap" style="gap:6px;margin-top:6px">
-                ${g.sandbox ? '<small class="mu" style="font-size:11.5px">أكواد متاحة للتجربة:</small>' : ''}
-                ${(g.sandbox ? Object.values(COUPONS_MAP) : []).map((c) => `
-                  <button type="button" class="badge ${pgState.appliedCoupon === c.code ? 'ok' : 'pr'}" style="border:none;cursor:pointer" data-a="pg-quick-coupon" data-c="${c.code}" title="${c.desc}">
-                    ${c.code}
-                  </button>
-                `).join('')}
-                ${pgState.appliedCoupon ? `<button type="button" class="badge er" style="border:none;cursor:pointer" data-a="pg-clear-coupon">إلغاء الكوبون ✕</button>` : ''}
-              </div>
-            </div>
-
-            <div class="row" style="padding:6px 0;font-size:13px">
-              <span class="mu">القيمة قبل الضريبة</span>
-              <span class="sp"></span>
-              <span>${fmtEGP(q.preTax)}</span>
-            </div>
-            <div class="row" style="padding:6px 0;font-size:13px">
-              <span class="mu">ضريبة القيمة المضافة (١٤٪)</span>
-              <span class="sp"></span>
-              <span>${fmtEGP(q.vat)}</span>
-            </div>
-            ${q.discount > 0 ? `
-              <div class="row" style="padding:6px 0;font-size:13px;color:var(--ok)">
-                <b>خصم الكوبون (${esc(q.coupon.code)})</b>
-                <span class="sp"></span>
-                <b>− ${fmtEGP(q.discount)}</b>
-              </div>
-            ` : ''}
-
-            <div class="row" style="padding:10px 0 2px;border-top:1px dashed var(--bd);margin-top:6px">
-              <b style="font-size:15px">الإجمالي المطلوب دفعه</b>
-              <span class="sp"></span>
-              <b class="pr-tx" style="font-size:22px">${fmtEGP(q.total)}</b>
-            </div>
-          </div>
-
-          <div style="margin-top:14px;font-size:12.5px;line-height:1.9;color:var(--mu)">
-            <div>✓ تفعيل لحظي لجميع مزايا الباقة وحدود المنتجات</div>
-            <div>✓ إصدار فاتورة ضريبية إلكترونية رسمية برمز QR</div>
-            <div>✓ إمكانية إلغاء التجديد التلقائي في أي وقت بدون شروط</div>
-          </div>
+          <b style="display:block;font-size:16px">اختر الباقة ودورة الاشتراك</b>
+          <small class="mu">الدفع يتم خارج الموقع عبر المحفظة الإلكترونية أو بوابة دفع خارجية مثل كاشير (Kashier).</small>
         </div>
-
-        <div class="card" style="padding:12px;background:var(--bg-elev);font-size:12px">
-          <div class="row" style="gap:8px">
-            <span style="font-size:18px">🛡️</span>
-            <div>
-              ${g.sandbox
-                ? '<b style="display:block">بيئة تجريبية</b><span class="mu">لا يُخصم أي مبلغ حقيقي ولا تُخزَّن بيانات البطاقة.</span>'
-                : '<b style="display:block">دفع مؤمّن</b><span class="mu">تُعالَج العملية لدى بوابة دفع مرخّصة، ولا تمر بيانات بطاقتك بخوادمنا.</span>'}
-            </div>
-          </div>
+        <div class="row" style="background:var(--bg);padding:4px;border-radius:9px;border:1px solid var(--bd);gap:4px">
+          <button type="button" class="pill ${pgState.cycle === 'monthly' ? 'on' : ''}" style="border:none;min-height:30px;padding:4px 11px;font-size:12px" data-a="pg-select-cycle" data-v="monthly">شهري</button>
+          <button type="button" class="pill ${pgState.cycle === 'yearly' ? 'on' : ''}" style="border:none;min-height:30px;padding:4px 11px;font-size:12px" data-a="pg-select-cycle" data-v="yearly">سنوي (وفّر شهرين)</button>
         </div>
       </div>
-    </form>
+
+      <div class="pg-plan-tabs" style="margin-bottom:18px">
+        ${PLANS.filter((x) => x.price > 0).map((p) => {
+          const pPrice = pgState.cycle === 'yearly' ? p.price * 10 : p.price;
+          const active = pgState.plan === p.id;
+          return `
+            <button type="button" class="pg-plan-card ${active ? 'active' : ''}" data-a="pg-select-plan" data-p="${p.id}">
+              <div class="row" style="justify-content:space-between;width:100%">
+                <b style="font-size:13.5px">${p.name}</b>
+                ${p.popular ? renderBadge('الأشهر', 'pr') : ''}
+              </div>
+              <div style="font-size:20px;font-weight:900;color:var(--pr)">
+                ${fmtEGP(pPrice)} <small class="mu" style="font-size:11.5px;font-weight:600">/ ${pgState.cycle === 'yearly' ? 'سنة' : 'شهر'}</small>
+              </div>
+              <small class="mu" style="font-size:11.5px">${p.feats[0]} · ${p.feats[1]}</small>
+            </button>
+          `;
+        }).join('')}
+      </div>
+
+      <div class="grid-equal" style="gap:14px;margin-bottom:16px">
+        <div class="card" style="background:var(--bg);padding:16px">
+          <div class="row" style="justify-content:space-between;margin-bottom:8px">
+            <b style="font-size:14.5px">${ico('smartphone', 16)} الدفع عبر المحفظة الإلكترونية</b>
+            ${renderBadge(walletNum ? 'متاح الآن' : 'محفظة إلكترونية', 'ok')}
+          </div>
+          <p class="mu" style="font-size:12.5px;margin:0 0 10px;line-height:1.7">
+            حوّل قيمة الباقة المختارة (<b>${fmtEGP(q.total)}</b>) عبر فودافون كاش، اتصالات كاش، أورنج كاش، WE Pay أو إنستاباي، وسيتم تفعيل اشتراكك فور مراجعة التحويل.
+          </p>
+          ${walletNum ? `
+            <div class="row-wrap" style="justify-content:space-between;gap:8px;padding:10px 12px;border:1px solid var(--bd);border-radius:10px;background:var(--card)">
+              <div>
+                <small class="mu" style="display:block;font-size:11px">رقم المحفظة المعتمد</small>
+                <b dir="ltr" style="font-size:14px">${esc(walletNum)}</b>
+              </div>
+              <button type="button" class="btn btn-gh btn-sm" data-a="pg-copy-ipa" data-v="${esc(walletNum)}">نسخ الرقم</button>
+            </div>
+          ` : `
+            <div style="padding:10px 12px;border:1px dashed var(--bd);border-radius:10px;font-size:12px" class="mu">
+              سيظهر هنا رقم المحفظة المعتمد فور تفعيله من إدارة المنصة.
+            </div>
+          `}
+        </div>
+
+        <div class="card" style="background:var(--bg);padding:16px">
+          <div class="row" style="justify-content:space-between;margin-bottom:8px">
+            <b style="font-size:14.5px">${ico('shield', 16)} بوابة الدفع الخارجية (كاشير — Kashier)</b>
+            ${renderBadge(extReady ? 'مربوطة وجاهزة ✓' : 'بوابة خارجية', extReady ? 'ok' : 'pr')}
+          </div>
+          <p class="mu" style="font-size:12.5px;margin:0 0 12px;line-height:1.7">
+            تحويل مباشر إلى صفحة الدفع الخارجية المؤمَّنة لدى <b>كاشير (Kashier)</b> مع تفعيل تلقائي للاشتراك فور تأكيد البوابة.
+          </p>
+          ${extReady ? `
+            <button type="button" class="btn btn-ac btn-sm" id="btn-pg-submit" data-a="pg-external-checkout" data-label="المتابعة إلى بوابة كاشير (${fmtEGP(q.total)}) ↗" style="width:100%">
+              المتابعة إلى بوابة كاشير (${fmtEGP(q.total)}) ↗
+            </button>
+          ` : `
+            <div style="padding:10px 12px;border:1px dashed var(--bd);border-radius:10px;font-size:12px" class="mu">
+              سيُفعَّل زر التحويل المباشر لبوابة كاشير (Kashier) فور إتمام ربط حساب البوابة.
+            </div>
+          `}
+        </div>
+      </div>
+
+      <p id="pg-err" class="pg-err er-tx" role="alert"></p>
+
+      <div class="row-wrap" style="justify-content:space-between;align-items:center;padding-top:12px;border-top:1px solid var(--bd);gap:10px">
+        <small class="mu">${ico('lock', 14)} الإجمالي للباقة المختارة: <b id="pg-total-egp" style="color:var(--tx)">${fmtEGP(q.total)}</b> (شامل ١٤٪ ق.م) · الدفع عبر المحفظة الإلكترونية أو بوابة كاشير الخارجية فقط.</small>
+        ${inModal ? '<button type="button" class="btn btn-gh btn-sm" data-a="pg-go-dash">الانتقال لصفحة الاشتراك</button>' : ''}
+      </div>
+    </div>
   `;
 }
 
-// 5.7.2 صفحة شباك الدفع والاشتراك في لوحة التحكم (#/pay)
+// 5.7.2 صفحة الاشتراك والدفع في لوحة التحكم (#/pay)
 views.pay = (d) => {
   if (d && d.plan) planInfo = d.plan;
   if (d && d.payments) payments = d.payments;
   if (d && d.gateway) pgState.gateway = { ...d.gateway, loaded: true };
   const p = planInfo || { id: 'free', name: 'باقة البداية', used: 0, limit: 50, markets: 2, aiLimit: 15, aiUsed: 0, cycle: 'monthly', autoRenew: true };
-  const activeMarkets = ['a', 'n', 'j'].filter((k) => state.integrations && state.integrations[k]).length;
+  const activeMarkets = ['a', 'n', 'j', 't', 'k'].filter((k) => state.integrations && state.integrations[k]).length;
 
   return `
     <div class="grid-kpi" style="margin-bottom:18px">
@@ -2621,44 +2389,10 @@ views.pay = (d) => {
       </div>
     </div>
 
-    <div class="card" style="padding:0;overflow:hidden;margin-bottom:22px;border:2px solid var(--pr)">
-      <div class="row-wrap" style="padding:16px 22px;background:linear-gradient(135deg,#071E38 0%,#0C5CA4 100%);color:#fff">
-        <div>
-          <span class="ai-badge" style="margin-bottom:4px">💳 شباك الدفع الإلكتروني الفوري — OrderFlow Pay</span>
-          <h3 style="margin:0;color:#fff;font-size:18px">اشترك أو جدّد باقتك الآن بالجنيه المصري (١٬٠٠٠ ج.م للباقة الاحترافية / ٣٬٠٠٠ ج.م للشركات والمخازن)</h3>
-        </div>
-        <span class="sp"></span>
-        <span style="font-size:12.5px;color:#cbd5e1">🔒 دفع مشفّر · تفعيل فوري · فاتورة ضريبية QR</span>
-      </div>
+    <div class="card" style="padding:0;overflow:hidden">
       <div id="pay-page-counter-box">
         ${renderPaymentGatewayCounter(false)}
       </div>
-    </div>
-
-    <div class="card">
-      <div class="row-wrap" style="margin-bottom:14px">
-        <div>
-          <h3 style="margin:0">سجل مدفوعات الاشتراك والإيصالات الضريبية</h3>
-          <small class="mu">جميع العمليات المسددة عبر شباك الدفع وفواتيرها الضريبية المعتمدة</small>
-        </div>
-        <span class="sp"></span>
-        <button type="button" class="btn btn-gh btn-sm" data-a="open-pay-window" data-p="pro">💳 فتح شباك الدفع في نافذة منبثقة</button>
-      </div>
-      ${payments.length ? renderTable(
-        ['رقم العملية', 'الباقة', 'الدورة', 'وسيلة الدفع', 'بيانات الدافع', 'التاريخ', 'الخصم', 'الإجمالي المسدَّد', 'الحالة', 'الإيصال الضريبي'],
-        payments.map((py) => [
-          `<code dir="ltr" style="font-weight:700;color:var(--pr)">${esc(py.txRef)}</code>`,
-          `<b>${esc(py.planName)}</b>`,
-          py.cycle === 'yearly' ? 'سنوي (١٢ شهرًا)' : 'شهري (٣٠ يومًا)',
-          esc(py.methodShort),
-          `<span dir="ltr" class="mu" style="font-size:12.5px">${esc(py.payerInfo || '—')}</span>`,
-          fmtDate(py.createdAt),
-          py.discount > 0 ? `<span class="ok-tx">−${fmtEGP(py.discount)} (${esc(py.coupon)})</span>` : '—',
-          `<b>${fmtEGP(py.amount)}</b>`,
-          ({ paid: renderBadge('مدفوع ✓', 'ok'), pending: renderBadge('قيد التأكيد…', 'wn'), failed: renderBadge('فشلت', 'er'), cancelled: renderBadge('ملغاة', 'er'), review: renderBadge('قيد المراجعة', 'wn') })[py.status] || renderBadge(esc(py.status), ''),
-          py.status === 'paid' ? `<button type="button" class="btn btn-gh btn-sm" data-a="open-receipt" data-id="${py.id}">🧾 إيصال ضريبي QR ↗</button>` : '—'
-        ])
-      ) : emptyState('💳', 'لا توجد مدفوعات سابقة', 'اختر الباقة المناسبة لك من شباك الدفع أعلاه لإتمام أول اشتراك وإصدار فاتورتك الضريبية.')}
     </div>
   `;
 };
@@ -4121,7 +3855,7 @@ const openPaymentGatewayModal = async (planId = 'pro', cycle = null) => {
   else if (location.hash === '' || location.hash === '#/') pgState.cycle = state.yearlyPricing ? 'yearly' : 'monthly';
   pgState.lastReceipt = null;
   state.mobileNavOpen = false;
-  openDialog('💳 شباك الدفع الإلكتروني الآمن — OrderFlow Pay', renderPaymentGatewayCounter(true), true);
+  openDialog('الاشتراك والدفع — المحفظة أو بوابة كاشير', renderPaymentGatewayCounter(true), true);
 };
 
 actions['open-pay-window'] = (el) => {
@@ -4367,7 +4101,7 @@ act('choose-plan', async (el) => {
   openPaymentGatewayModal(pid, state.yearlyPricing ? 'yearly' : 'monthly');
 });
 
-/* ----- أحداث شباك الدفع الإلكتروني (OrderFlow Pay Gateway Actions) ----- */
+/* ----- أحداث الاشتراك وبوابة الدفع الخارجية (المحفظة / كاشير) ----- */
 actions['pg-select-plan'] = (el) => {
   pgState.plan = el.dataset.p || 'pro';
   refreshPgCounterUI();
@@ -4378,66 +4112,9 @@ actions['pg-select-cycle'] = (el) => {
   refreshPgCounterUI();
 };
 
-actions['pg-select-method'] = (el) => {
-  pgState.method = el.dataset.m || 'card';
-  refreshPgCounterUI();
-};
-
-act('pg-apply-coupon', async () => {
-  const code = String($('#pg-coupon-inp')?.value || pgState.couponInput || '').trim().toUpperCase();
-  pgState.couponInput = code;
-  if (!code) return showToast('⚠️ أدخل كود الخصم أولًا');
-  try {
-    const r = await api('POST', '/api/billing/coupon', { code, plan: pgState.plan, cycle: pgState.cycle });
-    COUPONS_MAP[code] = { pct: r.coupon.pct, maxDiscount: r.coupon.maxDiscount, desc: r.coupon.desc };
-    pgState.appliedCoupon = code;
-    showToast(`🎉 تم تطبيق الكوبون ${code}: ${r.coupon.desc}`);
-    refreshPgCounterUI();
-  } catch (e) {
-    showToast('⚠️ ' + (e.message || 'كود الخصم غير صالح'));
-  }
-});
-
-actions['pg-quick-coupon'] = (el) => {
-  const code = el.dataset.c;
-  if (!code || !COUPONS_MAP[code]) return;
-  pgState.couponInput = code;
-  pgState.appliedCoupon = code;
-  showToast(`🎉 تم تفعيل الكوبون ${code}: ${COUPONS_MAP[code].desc}`);
-  refreshPgCounterUI();
-};
-
-actions['pg-clear-coupon'] = () => {
-  pgState.couponInput = '';
-  pgState.appliedCoupon = '';
-  refreshPgCounterUI();
-};
-
-actions['pg-fill-demo-card'] = () => {
-  pgState.cardHolder = 'AHMED ELNOOR';
-  pgState.cardNumber = '4242 4242 4242 4242';
-  pgState.cardExpiry = '12/30';
-  pgState.cardCvv = '123';
-  showToast('💳 تم تعبئة بطاقة الاختبار');
-  refreshPgCounterUI();
-};
-
 actions['pg-copy-ipa'] = async (el) => {
-  const v = el.dataset.v || 'orderflow.pay@instapay';
-  if (await copyText(v)) showToast(`📋 تم نسخ "${v}" إلى الحافظة ✓`);
-};
-
-actions['pg-send-otp'] = () => {
-  const code = String(100000 + Math.floor(Math.random() * 899999));
-  pgState.walletOtp = code;
-  const inp = $('#pg-wallet-otp');
-  if (inp) inp.value = code;
-  showToast(`📲 وصل كود التأكيد التجريبي للمحفظة: ${code}`);
-};
-
-actions['pg-new-payment'] = () => {
-  pgState.lastReceipt = null;
-  refreshPgCounterUI();
+  const v = el.dataset.v || '';
+  if (v && await copyText(v)) showToast(`📋 تم نسخ "${v}" إلى الحافظة ✓`);
 };
 
 actions['pg-go-dash'] = () => {
@@ -4445,51 +4122,9 @@ actions['pg-go-dash'] = () => {
   go('#/pay');
 };
 
-inputs['pg-coupon-typing'] = (el) => {
-  pgState.couponInput = el.value;
-};
-
-inputs['pg-field-sync'] = () => {
-  if ($('#pg-ipa-addr')) pgState.instaPayAddress = $('#pg-ipa-addr').value;
-  if ($('#pg-ipa-ref')) pgState.transferRef = $('#pg-ipa-ref').value;
-  if ($('#pg-wallet-prov')) pgState.walletProvider = $('#pg-wallet-prov').value;
-  if ($('#pg-wallet-phone')) pgState.walletPhone = $('#pg-wallet-phone').value;
-  if ($('#pg-wallet-otp')) pgState.walletOtp = $('#pg-wallet-otp').value;
-  if ($('#pg-fawry-phone')) pgState.fawryPhone = $('#pg-fawry-phone').value;
-};
-
-inputs['pg-card-input'] = (el) => {
-  if (el.id === 'pg-card-num') {
-    const digits = el.value.replace(/\D/g, '').slice(0, 16);
-    el.value = (digits.match(/.{1,4}/g) || []).join(' ');
-    pgState.cardNumber = el.value;
-  } else if (el.id === 'pg-card-exp') {
-    let d = el.value.replace(/\D/g, '').slice(0, 4);
-    if (d.length >= 3) d = d.slice(0, 2) + '/' + d.slice(2);
-    el.value = d;
-    pgState.cardExpiry = el.value;
-  } else if (el.id === 'pg-card-holder') {
-    pgState.cardHolder = el.value;
-  } else if (el.id === 'pg-card-cvv') {
-    pgState.cardCvv = el.value.replace(/\D/g, '').slice(0, 4);
-    el.value = pgState.cardCvv;
-  }
-  const numEl = $('#pg-card-preview-num');
-  if (numEl) {
-    const raw = String(pgState.cardNumber || '').replace(/\D/g, '');
-    numEl.textContent = (raw.padEnd(16, '•').match(/.{1,4}/g) || []).join(' ');
-  }
-  const bEl = $('#pg-card-preview-brand');
-  if (bEl) bEl.textContent = pgCardBrand(String(pgState.cardNumber || '').replace(/\D/g, ''));
-  const hEl = $('#pg-card-preview-holder');
-  if (hEl) hEl.textContent = pgState.cardHolder || 'MERCHANT NAME';
-  const eEl = $('#pg-card-preview-exp');
-  if (eEl) eEl.textContent = pgState.cardExpiry || 'MM/YY';
-};
-
 const newIdemKey = () => (globalThis.crypto && crypto.randomUUID ? crypto.randomUUID() : `k${Date.now()}${Math.random().toString(36).slice(2, 10)}`);
 
-/** يتابع عملية معلّقة حتى تتأكد من البوابة (الخطاف) أو تنتهي المهلة */
+/** يتابع عملية معلّقة حتى تتأكد من البوابة الخارجية (كاشير) أو تنتهي المهلة */
 async function pollPaymentStatus(ref, tries = 20, gap = 3000) {
   for (let i = 0; i < tries; i++) {
     const r = await api('GET', `/api/billing/status/${encodeURIComponent(ref)}`);
@@ -4502,72 +4137,51 @@ async function pollPaymentStatus(ref, tries = 20, gap = 3000) {
   return null;
 }
 
-act('pg-submit-checkout', async () => {
+act('pg-external-checkout', async () => {
   const errEl = $('#pg-err');
   if (errEl) errEl.textContent = '';
-  const g = pgState.gateway;
+  const g = pgState.gateway || {};
   const fail = (msg) => { if (errEl) { errEl.textContent = msg; errEl.focus?.(); } else showToast('⚠️ ' + msg, 4200); };
 
-  inputs['pg-field-sync']();
-  if ($('#pg-card-holder')) pgState.cardHolder = $('#pg-card-holder').value.trim();
-  if ($('#pg-card-num')) pgState.cardNumber = $('#pg-card-num').value.trim();
-  if ($('#pg-card-exp')) pgState.cardExpiry = $('#pg-card-exp').value.trim();
-  if ($('#pg-card-cvv')) pgState.cardCvv = $('#pg-card-cvv').value.trim();
-
-  if (g.collectsCardData && pgState.method === 'card') {
-    const digits = pgState.cardNumber.replace(/\D/g, '');
-    if (digits.length !== 16 || !luhnOk(digits)) return fail('رقم البطاقة غير صالح، تأكد من الأرقام.');
-    const m = /^(0[1-9]|1[0-2])\/(\d{2})$/.exec(pgState.cardExpiry);
-    if (!m) return fail('تاريخ الانتهاء غير صالح (MM/YY).');
-    const now = new Date();
-    if (+m[2] < now.getFullYear() % 100 || (+m[2] === now.getFullYear() % 100 && +m[1] < now.getMonth() + 1)) return fail('البطاقة منتهية الصلاحية.');
-    if (!/^\d{3,4}$/.test(pgState.cardCvv)) return fail('رمز الأمان CVV غير صالح.');
+  if (!g.externalGatewayReady) {
+    return fail('بوابة الدفع الخارجية (كاشير) غير مفعّلة بعد في إعدادات الخادم.');
   }
 
   const btn = $('#btn-pg-submit');
-  const restoreBtn = () => { if (btn) { btn.disabled = false; btn.innerHTML = btn.dataset.label || 'إتمام الدفع'; } };
-  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> جارٍ معالجة العملية...'; }
+  const restoreBtn = () => { if (btn) { btn.disabled = false; btn.innerHTML = btn.dataset.label || 'المتابعة إلى بوابة الدفع'; } };
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> جارٍ التحويل إلى بوابة الدفع الخارجية...'; }
 
   try {
     if (!me) {
-      if (!g.sandbox) {
-        closeDlg();
-        showToast('سجّل الدخول أو أنشئ حسابًا أولًا لإتمام الاشتراك');
-        actions.auth({ dataset: { m: 0 } });
-        return;
-      }
-      const demoRes = await api('POST', '/api/auth/demo');
-      if (demoRes && demoRes.token) { try { localStorage.setItem('omni_token', demoRes.token); } catch (_) {} }
-      await loadSession();
+      closeDlg();
+      showToast('سجّل الدخول أو أنشئ حسابًا أولًا لإتمام الاشتراك');
+      actions.auth({ dataset: { m: 0 } });
+      return;
     }
 
     if (!pgState.idemKey) pgState.idemKey = newIdemKey();
-    const payload = { plan: pgState.plan, cycle: pgState.cycle, method: pgState.method, coupon: pgState.appliedCoupon, idempotencyKey: pgState.idemKey };
-    if (g.collectsCardData) {
-      Object.assign(payload, {
-        cardHolder: pgState.cardHolder, cardNumber: pgState.cardNumber, cardExpiry: pgState.cardExpiry, cardCvv: pgState.cardCvv,
-        instaPayAddress: pgState.instaPayAddress, transferRef: pgState.transferRef,
-        walletProvider: pgState.walletProvider, walletPhone: pgState.walletPhone, walletOtp: pgState.walletOtp,
-        fawryPhone: pgState.fawryPhone
-      });
-    }
+    const payload = {
+      plan: pgState.plan,
+      cycle: pgState.cycle,
+      method: g.provider === 'kashier' ? 'kashier' : 'wallet',
+      coupon: pgState.appliedCoupon,
+      idempotencyKey: pgState.idemKey
+    };
 
     const r = await api('POST', '/api/billing/checkout', payload);
     if (r.plan) planInfo = r.plan;
     if (r.me) me = r.me;
     if (r.payments) payments = r.payments;
 
-    pgState.cardNumber = ''; pgState.cardCvv = ''; pgState.cardExpiry = ''; pgState.walletOtp = '';
-
     if (r.status === 'pending' && r.redirectUrl) {
-      showToast('جارٍ تحويلك إلى صفحة الدفع الآمنة...', 4000);
+      showToast('جارٍ تحويلك إلى بوابة الدفع الخارجية الآمنة...', 4000);
       location.assign(r.redirectUrl);
       return;
     }
     if (r.status === 'pending') {
-      showToast('العملية قيد التأكيد من البوابة...', 4000);
+      showToast('العملية قيد التأكيد من البوابة الخارجية...', 4000);
       const done = await pollPaymentStatus(r.payment.txRef);
-      if (!done || done.status !== 'paid') { renderApp(true); return fail('لم يصلنا تأكيد الدفع بعد. ستجد حالة العملية في سجل المدفوعات وسيُفعَّل اشتراكك تلقائيًا عند التأكيد.'); }
+      if (!done || done.status !== 'paid') { renderApp(true); return fail('لم يصلنا تأكيد الدفع بعد. سيُفعَّل اشتراكك تلقائيًا فور التأكيد.'); }
       r.payment = done.payment;
     }
     pgState.idemKey = '';
@@ -4576,7 +4190,6 @@ act('pg-submit-checkout', async () => {
     if (location.hash === '#/pay') renderApp(true); else refreshPgCounterUI();
   } catch (e) {
     pgState.idemKey = '';
-    pgState.cardCvv = '';
     if (e.data && e.data.code === 'PAYMENT_UNAVAILABLE') { pgState.gateway = { ...pgState.gateway, enabled: false }; refreshPgCounterUI(); return; }
     fail(e.message);
     restoreBtn();

@@ -32,13 +32,22 @@ function createPayments(app) {
 
   const methods = () => (provider ? provider.methods.filter((m) => GATEWAY_METHODS[m]).map((m) => GATEWAY_METHODS[m]) : []);
 
-  /** ما يحتاجه المتصفح لرسم شباك الدفع (لا أسرار هنا) */
+  /** ما يحتاجه المتصفح لعرض حالة الدفع الخارجي والمحفظة (لا أسرار هنا) */
   const publicConfig = () => ({
     enabled: Boolean(provider),
     provider: provider ? provider.id : null,
+    providerName: provider ? provider.name : null,
     mode: provider ? provider.mode : null,
     sandbox: provider ? provider.mode === 'sandbox' : false,
     collectsCardData: provider ? provider.collectsCardData : false,
+    externalGatewayReady: Boolean(
+      provider &&
+      !provider.collectsCardData &&
+      (provider.id === 'kashier'
+        ? (cfg.payments.kashierMerchantId && cfg.payments.kashierApiKey)
+        : (cfg.payments.apiUrl && cfg.payments.apiKey))
+    ),
+    walletNumber: cfg.payments.walletNumber || '',
     currency: cfg.payments.currency,
     methods: methods(),
     testCards: provider && provider.testCards ? provider.testCards : undefined

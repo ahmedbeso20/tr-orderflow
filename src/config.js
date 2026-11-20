@@ -66,7 +66,7 @@ function load(o = {}) {
     nodeEnv,
     production,
     payments: Object.freeze({
-      // sandbox | hosted | اسم ملف داخل src/payments/providers — وفي الإنتاج لا شيء افتراضيًا حتى تُضبط بوابة حقيقية
+      // sandbox | hosted | kashier | اسم ملف داخل src/payments/providers — وفي الإنتاج لا شيء افتراضيًا حتى تُضبط بوابة حقيقية
       provider: String(o.paymentProvider ?? e.PAYMENT_PROVIDER ?? (production ? '' : 'sandbox')).trim().toLowerCase(),
       allowSandboxInProduction: flag(o.paymentAllowSandbox ?? e.PAYMENT_ALLOW_SANDBOX, false),
       apiUrl: o.paymentApiUrl ?? e.PAYMENT_API_URL ?? '',
@@ -75,7 +75,12 @@ function load(o = {}) {
       signatureHeader: String(e.PAYMENT_SIGNATURE_HEADER || 'x-signature').toLowerCase(),
       signatureEncoding: e.PAYMENT_SIGNATURE_ENCODING === 'base64' ? 'base64' : 'hex',
       amountUnit: e.PAYMENT_AMOUNT_UNIT === 'minor' ? 'minor' : 'major',
-      methods: String(e.PAYMENT_METHODS || 'card,wallet,instapay,fawry').split(',').map((s) => s.trim()).filter(Boolean),
+      methods: String(e.PAYMENT_METHODS || 'wallet,kashier,instapay,card').split(',').map((s) => s.trim()).filter(Boolean),
+      kashierMerchantId: String(o.kashierMerchantId ?? e.KASHIER_MERCHANT_ID ?? '').trim(),
+      kashierApiKey: String(o.kashierApiKey ?? e.KASHIER_API_KEY ?? '').trim(),
+      kashierMode: String(o.kashierMode ?? e.KASHIER_MODE ?? (production ? 'live' : 'test')).trim().toLowerCase(),
+      kashierAllowedMethods: String(o.kashierAllowedMethods ?? e.KASHIER_ALLOWED_METHODS ?? 'wallet').trim(),
+      walletNumber: String(o.paymentWalletNumber ?? e.PAYMENT_WALLET_NUMBER ?? '').trim(),
       currency: 'EGP'
     }),
     maxDemos: +(o.maxDemos ?? e.MAX_DEMOS ?? 500),
