@@ -97,6 +97,16 @@ test('OrderFlowGrowth exposes partner certifications, 3-tab solutions, expert se
   }
 
   assert.equal(growth.SOLUTIONS_TABS.length, 3);
+  const opsTab = growth.SOLUTIONS_TABS.find((t) => t.id === 'ops');
+  const expertsTab = growth.SOLUTIONS_TABS.find((t) => t.id === 'experts');
+  assert.equal(opsTab.items.length, 4);
+  assert.equal(expertsTab.items.length, 4);
+  const removedNames = new Set(['تحصيلات COD', 'فواتير إلكترونية ETA', 'إدارة الإعلانات PPC', 'تدريب فريقك']);
+  for (const tab of growth.SOLUTIONS_TABS) {
+    for (const item of tab.items) {
+      assert.ok(!removedNames.has(item.name), `unexpected removed card in SOLUTIONS_TABS: ${item.name}`);
+    }
+  }
   assert.ok(growth.EXPERT_SERVICES_UI.length >= 6);
   assert.ok(growth.SELLER_GUIDES.length >= 4);
 

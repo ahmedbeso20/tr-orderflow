@@ -812,7 +812,7 @@ const renderSolutionsPanel = () => {
         </div>
         <button type="button" class="btn btn-ac" data-a="${active.ctaAction}">${active.ctaText} ${ico('arrowLeft', 15)}</button>
       </div>
-      <div class="solutions-cards-grid">
+      <div class="solutions-cards-grid${active.items.length === 4 ? ' cols-2' : ''}">
         ${active.items.map((item) => `
           <div class="solution-mini-card">
             <span class="bento-ico" aria-hidden="true">${ico(item.icon, 19)}</span>
